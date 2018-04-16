@@ -1,0 +1,10 @@
+# generate protos
+protoc object_detection/protos/*.proto --python_out=.
+
+# train model
+python -m object_detection.train --pipeline_config_path=models/research/pa_utils/configs/person/faster_rcnn_inception_v2.config \
+--train_dir=models/research/pa_utils/model_output/person/faster_rcnn_inception_v2/train_aa --gpu=0
+
+# if 2 GPUs, then append --num_clones=2 --ps_tasks=1
+
+
