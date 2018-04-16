@@ -1,0 +1,2 @@
+# ignore compiled protos files
+protos/*_pb2.py
