@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import logging
 from object_detection.utils import label_map_util
 
 
@@ -40,18 +41,24 @@ def resize_image(image, min_dimension, max_dimension):
 
 
 def get_video_info(video_path):
+
     video = cv2.VideoCapture(video_path)
     (major_ver, minor_ver, subminor_ver) = (cv2.__version__).split('.')
     if int(major_ver) < 3:
         length = int(video.get(cv2.cv.CV_CAP_PROP_FRAME_COUNT))
         width = int(video.get(cv2.cv.CV_CAP_PROP_FRAME_WIDTH))
         height = int(video.get(cv2.cv.CV_CAP_PROP_FRAME_HEIGHT))
-        fps = int(video.get(cv2.cv.CV_CAP_PROP_FPS))
+        fps = video.get(cv2.cv.CV_CAP_PROP_FPS)
     else:
         length = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
         width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(video.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fps = int(video.get(cv2.CAP_PROP_FPS))
+        fps = video.get(cv2.CAP_PROP_FPS)
+    try:
+        fps = int(fps)
+    except:
+        logging.error('fail to parse fps (%s), hard code to 25' % fps)
+        fps = 25
     print("length: {0}, width: {1}, height: {2}, fps: {3}".format(length, width, height, fps))
     return length, width, height, fps
 
@@ -69,6 +76,16 @@ def read_video(video_path, frame_freq=None):
         frame_idx += 1
     video.release()
     cv2.destroyAllWindows()
+
+
+def generate_output_video(frames, output_path, width, height, output_fps=1):
+    fourcc = cv2.VideoWriter_fourcc(*'XVID')
+    video_writer = cv2.VideoWriter(output_path, fourcc, output_fps, (width, height))
+    for frame in frames:
+        video_writer.write(frame)
+        cv2.imshow('', frame)
+        cv2.waitKey(1)
+    video_writer.release()
 
 
 def create_label_categories(label_path, num_classes):

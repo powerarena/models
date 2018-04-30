@@ -39,8 +39,8 @@ def generate_from_video(video_path, output_dir, image_prefix='',
 
     frame_count = -1
     if skip_n_seconds:
-        video.set(cv2.CAP_PROP_POS_FRAMES, skip_n_seconds*fps)
-        frame_count += skip_n_seconds*fps
+        # video.set(cv2.CAP_PROP_POS_FRAMES, skip_n_seconds*fps)
+        # frame_count += skip_n_seconds*fps
         max_video_length += skip_n_seconds
     while video.isOpened():
         frame_count += 1
@@ -50,6 +50,9 @@ def generate_from_video(video_path, output_dir, image_prefix='',
         ret, frame = video.read()
         if not ret:
             break
+
+        if frame_count < skip_n_seconds*fps:
+            continue
 
         if frame_count % fps == 0:
             logging.info("video at %s sec" % (frame_count // fps))
@@ -79,13 +82,14 @@ def generate_from_video(video_path, output_dir, image_prefix='',
 if __name__ == '__main__':
     video_path = '/home/ma-glass/Downloads/20180413(2).mp4'
     output_dir = 'image_samples/defond'
-    image_prefix = 'shenzhen'
+    image_prefix = 'defond'
     output_fps = 5
     show_images = True
-    max_video_length = 60
+    max_video_length = 300
 
     generate_from_video(video_path, output_dir, image_prefix=image_prefix,
                         output_fps=output_fps,
                         output_minmax_size=(600, 1024),
                         show_images=show_images,
+                        skip_n_seconds=0,
                         max_video_length=max_video_length)
