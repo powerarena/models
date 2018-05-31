@@ -20,11 +20,29 @@ label_path = os.path.join(base_folder, 'data/label_maps/person_label_map.pbtxt')
 category_index = create_label_categories(label_path, 100)
 
 BOOTSTRAP_SEC = 30
-GRID_SIZE = 30
+GRID_SIZE = 20
 PROCESS_FPS = 5
 MAX_TRACK_SECONDS = 120
 IMAGE_WIDTH, IMAGE_HEIGHT = (1920, 1080)
-SERVICE_GRID_REGIONS = prepare_service_grips()
+
+SERVICE_REGION_PIXEL = 150
+SERVICE_GRID_NUM = max(3, math.ceil(SERVICE_REGION_PIXEL/GRID_SIZE))
+def prepare_service_grips():
+    # rows = np.arange(5)
+    # cols = np.arange(5)
+    # x, y = np.meshgrid(rows, cols)
+    # service_grids = np.stack((x, y), axis=-1)
+    num_grid = SERVICE_GRID_NUM
+    center_grid = round(num_grid*3/5)
+    service_grids = np.array([(j, i) for i in range(0, num_grid) for j in range(0, num_grid)]).reshape(num_grid*num_grid,2) - (center_grid,center_grid)
+    # column_grids = service_grids.reshape(num_grid, num_grid, 2)[:,0,1]
+    # column_weight = pow((num_grid - abs(column_grids))/num_grid, 2)
+    column_grids = np.arange(int(num_grid/2)*2+1) - int(num_grid/2)
+    column_weight = pow((column_grids.shape[0] - abs(column_grids)) / column_grids.shape[0], 2)
+    return service_grids, column_grids, column_weight
+
+SERVICE_REGION_GRIDS, SERVICE_REGION_COLUMNS, SERVICE_REGION_COLUMNS_WEIGHT = prepare_service_grips()
+print(SERVICE_REGION_COLUMNS, SERVICE_REGION_COLUMNS_WEIGHT)
 
 COLOR_LIST = get_color_list(return_rgb=True)
 COLOR_NAME_LIST = get_color_list()
@@ -172,8 +190,8 @@ def track_grids(grid_detection_history, tracks_active, frame_idx):
         grid_detection_history[grid_id].append((frame_idx, count))
 
 
-def track_detections(detections, image_reader_bootstrap, image_reader, desk_positions=None,
-                     min_score_thresh=.5, wait_time=1,
+def track_detections(detections, image_reader_bootstrap, image_reader, desk_positions, table_face_slope,
+                     sess=None, min_score_thresh=.5, wait_time=1,
                      output_processor=None):
     counter_show_up_threshold = 60*PROCESS_FPS
     all_counters = dict((desk_idx, collections.deque(maxlen=counter_show_up_threshold)) for desk_idx in range(len(desk_positions)))
@@ -194,10 +212,14 @@ def track_detections(detections, image_reader_bootstrap, image_reader, desk_posi
         track_grids(grid_detection_history, tracks_active, image_idx)
         return tracks_active
 
+    boostrap_detections = dict()
     # bootstrap 30s
     for image_idx, image in enumerate(image_reader_bootstrap):
-        # output_dict = run_inference_for_single_image(sess, image)
-        output_dict = detections[image_idx]
+        if detections is None:
+            output_dict = run_inference_for_single_image(sess, image)
+            boostrap_detections[image_idx] = output_dict
+        else:
+            output_dict = detections[image_idx]
         output_dict = output_dict.copy()
 
         remove_detection(output_dict, min_score_thresh=min_score_thresh)
@@ -212,17 +234,26 @@ def track_detections(detections, image_reader_bootstrap, image_reader, desk_posi
     draw_grid = False
     draw_flow = False
     draw_counter = False
+    draw_service_region = False
     draw_queue_line = False
-    draw_service_region = True
-    draw_queue_region = False
+    draw_queue_region = True
     draw_non_queue_people = False
     draw_queue_people = True
+    start = time.time()
     for image_idx, image in enumerate(image_reader):
+        if image_idx < 0*PROCESS_FPS:
+            if image_idx % PROCESS_FPS == 0:
+                print(image_idx//PROCESS_FPS)
+            continue
         draw = image_idx % PROCESS_FPS == 0
-        start = time.time()
 
-        # output_dict = run_inference_for_single_image(sess, image)
-        output_dict = detections[image_idx]
+        if detections is None:
+            if image_idx not in boostrap_detections:
+                output_dict = run_inference_for_single_image(sess, image)
+            else:
+                output_dict = boostrap_detections[image_idx]
+        else:
+            output_dict = detections[image_idx]
 
         remove_detection(output_dict, min_score_thresh=min_score_thresh)
         output_dict['detection_boxes'] = np.rint(output_dict['detection_boxes'] * (image.shape[0], image.shape[1], image.shape[0], image.shape[1])).astype(np.int32)
@@ -232,39 +263,44 @@ def track_detections(detections, image_reader_bootstrap, image_reader, desk_posi
         tracks_active = _process_people_flow(image_idx, image, output_dict, all_counters, tracks_active, track_id_start, grid_detection_history)
 
         available_counters = detect_counters(all_counters, image_idx)
+        # available_counters = list(range(0, len(desk_positions)))
         for track in tracks_active:
             track['last_frame_idx'] = image_idx
             all_tracks[track['track_id']] = track
         if len(tracks_active) > 0:
             track_id_start = 1 + tracks_active[-1]['track_id']
-        if draw_flow:
-            process_and_draw_track_lines(image, grid_detection_history, image_idx)
+        grids_weight = process_and_draw_track_lines(image, grid_detection_history, image_idx, draw_flow=draw and draw_flow)
 
-        font = cv2.FONT_HERSHEY_SCRIPT_SIMPLEX
-        cv2.putText(image, '%d' % (image_idx//PROCESS_FPS), (100, 100), font, 4, (0, 0, 255), 4, cv2.LINE_AA)
-        cv2.putText(image, '%s' % available_counters, (100, 250), font, 3, (0, 0, 255), 3, cv2.LINE_AA)
 
         # # draw counter tables
-        if draw_counter:
-            draw_counter_tables(image, desk_positions)
-
-        draw_grid_lines(image, draw_grid)
-        basic_queue_lines = get_baisc_queue_lines(available_counters, desk_positions, grid_detection_history, image, draw_queue_line=draw_queue_line)
-        get_and_draw_service_regions(desk_positions, basic_queue_lines, image=image, draw_service_region=draw_service_region)
-        queue_regions = get_basic_queue_regions(basic_queue_lines, desk_positions, image.shape[1], image.shape[0], image=image, draw_queue_region=draw_queue_region)
-        queue_count = get_and_draw_queues(queue_regions, output_dict, image, image_idx, grid_detection_history,
-                                          draw_queue_people=draw and draw_queue_people, draw_non_queue_people=draw_non_queue_people)
-        cv2.putText(image, '%s' % [queue_count[queue_idx] for queue_idx in available_counters], (100, 350), font, 3, (0, 0, 255), 3, cv2.LINE_AA)
+        draw_counter_tables(image, desk_positions, draw_counter=draw and draw_counter)
 
         if draw:
+            draw_grid_lines(image, draw_grid)
+            basic_queue_lines = get_baisc_queue_lines(available_counters, desk_positions, grid_detection_history, image, draw_queue_line=False)
+            # basic_queue_regions = get_basic_queue_regions(basic_queue_lines, desk_positions, image.shape[1], image.shape[0], image=image, draw_queue_region=draw and draw_queue_region)
+            queue_lines, service_regions = get_and_draw_service_regions(grids_weight, basic_queue_lines, table_face_slope, image=image,
+                                                       draw_service_region=draw and draw_service_region, draw_queue_line=draw and draw_queue_line)
+            queue_regions = get_queue_regions(queue_lines, desk_positions, image.shape[1], image.shape[0],
+                                                    image=image, draw_queue_region=draw and draw_queue_region)
+            queue_count = get_and_draw_queues(service_regions, queue_regions, output_dict, image, image_idx, grid_detection_history,
+                                              draw_queue_people=draw and draw_queue_people, draw_non_queue_people=draw and draw_non_queue_people)
+
+            # visual stat
+            font = cv2.FONT_HERSHEY_SCRIPT_SIMPLEX
+            cv2.putText(image, '%d' % (image_idx // PROCESS_FPS), (100, 100), font, 4, (0, 0, 255), 4, cv2.LINE_AA)
+            cv2.putText(image, '%s' % available_counters, (100, 250), font, 3, (0, 0, 255), 3, cv2.LINE_AA)
+            cv2.putText(image, '%s' % [queue_count[queue_idx] for queue_idx in available_counters], (100, 350), font, 3,
+                        (0, 0, 255), 3, cv2.LINE_AA)
             cv2.imshow('frame', image)
             if cv2.waitKey(wait_time) & 0xFF == ord('q'):
                 return
 
         if output_processor:
-            output_processor(image_idx, queue_count)
+            output_processor(image_idx, queue_count, image=image)
 
         print(image_idx, time.time() - start)
+        start = time.time()
     # time.sleep(100)
     cv2.destroyAllWindows()
 
@@ -295,15 +331,18 @@ def extend_line(point1, point2, width, height, max_extend_ratio=0):
         return (int(x), int(y))
 
 
-def process_and_draw_track_lines(image, grid_detection_history, current_frame_idx, show_last_n_frames=PROCESS_FPS*MAX_TRACK_SECONDS):
+def process_and_draw_track_lines(image, grid_detection_history, current_frame_idx, show_last_n_frames=PROCESS_FPS*MAX_TRACK_SECONDS, draw_flow=False):
+    grids_weight = np.zeros((IMAGE_WIDTH//GRID_SIZE, IMAGE_HEIGHT//GRID_SIZE))
     for grid_id, grid_counts in grid_detection_history.items():
         grid_weight = 0
         for frame_idx, count in reversed(grid_counts):
             if current_frame_idx - frame_idx > show_last_n_frames:
                 break
             grid_weight += max(0, ((5 - 5*(current_frame_idx-frame_idx)//show_last_n_frames) / 5))
+        if draw_flow:
             cv2.circle(image, get_grid_center(*grid_id), min(30, math.floor(grid_weight / 10)), (0, 0, 255), -1)
-
+        grids_weight[grid_id] = grid_weight
+    return grids_weight
     # grid_count = collections.defaultdict(int)
     # grid_connect = collections.defaultdict(int)
     # for track_id, track in tracks_active.items():
@@ -360,6 +399,26 @@ def filter_detection_by_prolong_grid(region_indice, detections, grid_detection_h
         if is_prolong(grid_id):
             prolong_indice.append(idx)
     return prolong_indice
+
+
+def filter_detection_by_far_detection(region_indice, detections, service_region):
+    def sort_detection_by_x_axis():
+        return sorted([(idx, detection) for idx, detection in zip(region_indice, detections[region_indice])], key=lambda x: center(x[1])[0])
+    sorted_detections = sort_detection_by_x_axis()
+    filtered_indice = []
+    if len(sorted_detections) > 0:
+        first_detection = sorted_detections[0]
+        if abs(first_detection[1][1] - get_grid_center(*service_region[1])[0]) >= IMAGE_WIDTH/6:
+            return []
+        filtered_indice.append(first_detection[0])
+        for i in range(1, len(sorted_detections)):
+            if abs(sorted_detections[i][1][1] - sorted_detections[i-1][1][1]) >= IMAGE_WIDTH/4:
+                break
+            else:
+                filtered_indice.append(sorted_detections[i][0])
+        return sorted(filtered_indice)
+    else:
+        return region_indice
 
 
 def get_counter_staff_indices(detections, desk_positions, image_shape):
@@ -441,11 +500,72 @@ def get_basic_queue_regions(queue_lines, desk_positions, width, height, image=No
     return queue_regions
 
 
-def get_and_draw_queues(queue_regions, output_dict, image, current_frame_idx, grid_detection_history, draw_queue_people=True, draw_non_queue_people=False):
+def get_queue_regions(queue_lines, desk_positions, width, height, image=None, draw_queue_region=False):
+    queue_regions = dict()
+    last_queue_line = None
+    available_queue_counters = sorted(queue_lines.keys())
+
+    for process_idx in range(len(available_queue_counters)):
+        counter_idx = available_queue_counters[process_idx]
+        queue_region_points = []
+        if last_queue_line is None:
+            last_queue_line = []
+            for grid_id_x, grid_id_y in queue_lines[counter_idx]:
+                x, y = get_grid_center(grid_id_x, grid_id_y)
+                if process_idx + 1 < len(available_queue_counters):
+                    y_margin = min(90, 30*(available_queue_counters[process_idx + 1] - counter_idx))
+                else:
+                    y_margin = 90
+                last_queue_line.append((x, int(y) - y_margin))
+            margin = np.array([0, -GRID_SIZE])
+            queue_region_points.append(desk_positions[counter_idx][4])
+            queue_region_points.append(margin+desk_positions[counter_idx][0])
+            queue_region_points.append(margin+desk_positions[counter_idx][3])
+            queue_region_points.append(desk_positions[counter_idx][2])
+            queue_region_points.extend(last_queue_line)
+            queue_region_points.append(extend_line(desk_positions[counter_idx][4], desk_positions[counter_idx][5], width, height))
+        else:
+            queue_region_points.extend(last_queue_line)
+            queue_region_points.append(margin+desk_positions[counter_idx][0])
+            queue_region_points.append(margin+desk_positions[counter_idx][3])
+            queue_region_points.append(desk_positions[counter_idx][2])
+            last_queue_line = []
+            if process_idx + 1 >= len(available_queue_counters):
+                extended_counter_idx = counter_idx
+                if (counter_idx + 1) not in queue_lines and (counter_idx + 1) < len(desk_positions):
+                    if (counter_idx + 2) not in queue_lines and (counter_idx + 2) < len(desk_positions):
+                        extended_counter_idx = counter_idx + 2
+                    else:
+                        extended_counter_idx = counter_idx + 1
+                queue_region_points.append(margin+desk_positions[extended_counter_idx][3])
+                queue_region_points.append(extend_line(desk_positions[extended_counter_idx][3], desk_positions[extended_counter_idx][2], width, height))
+            else:
+                next_counter_idx = available_queue_counters[process_idx + 1]
+                next_queue_line_dict = dict(queue_lines[next_counter_idx])
+                for grid_id_x, grid_id_y in queue_lines[counter_idx]:
+                    if grid_id_x not in next_queue_line_dict:
+                        x, y = get_grid_center(grid_id_x, grid_id_y)
+                        y_margin = 90
+                        last_queue_line.append((x, int(y) - y_margin))
+                    else:
+                        avg_grid_id_y = (grid_id_y + next_queue_line_dict[grid_id_x])/2
+                        x, y = get_grid_center(grid_id_x, avg_grid_id_y)
+                        last_queue_line.append((x, int(y)))
+                queue_region_points.extend(last_queue_line)
+        queue_regions[counter_idx] = queue_region_points
+        last_queue_line.reverse()
+        if draw_queue_region and image is not None:
+            cv2.polylines(image, [np.array(queue_region_points)], True, COLOR_LIST[counter_idx])
+    return queue_regions
+
+
+def get_and_draw_queues(service_regions, queue_regions, output_dict, image, current_frame_idx, grid_detection_history, draw_queue_people=True, draw_non_queue_people=False):
     queue_count = dict()
     for queue_idx in queue_regions:
         region_indice = filter_detections_inside_regions(output_dict['detection_boxes'], [queue_regions[queue_idx]])
         region_indice = filter_detection_by_prolong_grid(region_indice, output_dict['detection_boxes'], grid_detection_history, current_frame_idx)
+        # filter if too far away from service region / last detected person in terms of x axis pixel.
+        region_indice = filter_detection_by_far_detection(region_indice, output_dict['detection_boxes'], service_regions[queue_idx])
         queue_count[queue_idx] = len(region_indice)
         if draw_queue_people:
             label_image(image, dict(detection_boxes=output_dict['detection_boxes'][region_indice]),
@@ -465,16 +585,17 @@ def get_desk_center_line(desk_position, width, height):
     return point1, point2
 
 
-def draw_counter_tables(image, desk_positions):
-    for desk_idx, desk_position in enumerate(desk_positions):
-        # table 2d
-        # print(desk_position)
-        cv2.polylines(image, [np.array(desk_position[:4])], True, COLOR_LIST[desk_idx])
-        # table 3d
-        cv2.line(image, desk_position[1], desk_position[5], COLOR_LIST[desk_idx])
-        cv2.line(image, desk_position[0], extend_line(desk_position[0], desk_position[1], image.shape[1], image.shape[0]), COLOR_LIST[desk_idx])
-        cv2.line(image, desk_position[3], extend_line(desk_position[3], desk_position[2], image.shape[1], image.shape[0]), COLOR_LIST[desk_idx])
-        cv2.line(image, desk_position[4], extend_line(desk_position[4], desk_position[5], image.shape[1], image.shape[0]), COLOR_LIST[desk_idx])
+def draw_counter_tables(image, desk_positions, draw_counter=False):
+    if draw_counter:
+        for desk_idx, desk_position in enumerate(desk_positions):
+            # table 2d
+            # print(desk_position)
+            cv2.polylines(image, [np.array(desk_position[:4])], True, COLOR_LIST[desk_idx])
+            # table 3d
+            cv2.line(image, desk_position[1], desk_position[5], COLOR_LIST[desk_idx])
+            cv2.line(image, desk_position[0], extend_line(desk_position[0], desk_position[1], image.shape[1], image.shape[0]), COLOR_LIST[desk_idx])
+            cv2.line(image, desk_position[3], extend_line(desk_position[3], desk_position[2], image.shape[1], image.shape[0]), COLOR_LIST[desk_idx])
+            cv2.line(image, desk_position[4], extend_line(desk_position[4], desk_position[5], image.shape[1], image.shape[0]), COLOR_LIST[desk_idx])
 
 
 def draw_grid_lines(image, draw_grid):
@@ -485,11 +606,87 @@ def draw_grid_lines(image, draw_grid):
         cv2.polylines(image, vertical_lines, True, (0, 255, 255))
 
 
-def get_and_draw_service_regions(desk_positions, basic_queue_lines, image=None, draw_service_region=False):
+def get_and_draw_service_regions(grids_weight, basic_queue_lines, table_face_slope, image=None, draw_service_region=False, draw_queue_line=False):
     queue_lines = dict()
-    for counter_idx, (point1, _) in basic_queue_lines.items():
-        queue_lines[counter_idx] = get_nearest_grid_id(*point1)
-    return queue_lines
+    grid_x_occupy = dict()
+    service_regions = dict()
+    for counter_idx in sorted(basic_queue_lines.keys()):
+        point1, _ = basic_queue_lines[counter_idx]
+        service_grid_to_search = SERVICE_REGION_GRIDS + get_nearest_grid_id(*point1)
+        if counter_idx == 0 and 0 in basic_queue_lines:
+            service_regions[counter_idx] = [service_grid_to_search[0], service_grid_to_search[-1]]
+            queue_lines[0] = [(x//GRID_SIZE, y/GRID_SIZE) for x,y in basic_queue_lines[0]]
+            continue
+        queue_line = []
+        if service_grid_to_search[0][0] < 0:
+            service_grid_to_search += (-service_grid_to_search[0][0], 0)
+        elif service_grid_to_search[-1][0] >= IMAGE_WIDTH // GRID_SIZE:
+            service_grid_to_search -= (service_grid_to_search[-1][0] - (IMAGE_WIDTH // GRID_SIZE) + 1, 0)
+        if service_grid_to_search[0][1] < 0:
+            service_grid_to_search += (0, -service_grid_to_search[0][1])
+        elif service_grid_to_search[-1][1] >= IMAGE_WIDTH // GRID_SIZE:
+            service_grid_to_search -= (0, service_grid_to_search[-1][1] - (IMAGE_WIDTH // GRID_SIZE) + 1)
+        service_region_grids = grids_weight[service_grid_to_search[:,0],service_grid_to_search[:,1]].reshape((SERVICE_GRID_NUM, SERVICE_GRID_NUM))
+        service_region_weight_sum = service_region_grids.sum()
+        if service_region_weight_sum > 0:
+            grid_with_max_weight = service_region_grids.argmax()
+            max_weight_grid_id = service_grid_to_search[grid_with_max_weight]
+            max_grid_weight = grids_weight[tuple(max_weight_grid_id)]
+            first_grid_x = 1.0*(service_region_grids*range(service_region_grids.shape[1])).sum()/service_region_weight_sum
+            y_points = np.arange(service_region_grids.shape[0]).reshape((service_region_grids.shape[0], 1))
+            first_grid_y = 1.0*(service_region_grids*y_points).sum()/service_region_weight_sum
+            first_grid_id = service_grid_to_search[0] + (first_grid_x, first_grid_y)
+        else:
+            max_grid_weight = 0
+            first_grid_id = get_nearest_grid_id(*point1)
+        last_grid_x = int(round(first_grid_id[0]))
+        last_grid_y = first_grid_id[1]
+        queue_line.append((int(round(last_grid_x)), int(round(last_grid_y))))
+
+        queue_line_weighted_sum = collections.deque(maxlen=IMAGE_WIDTH//GRID_SIZE//8)
+        while last_grid_x < IMAGE_WIDTH // GRID_SIZE - 1:
+            grid_x = last_grid_x + 1
+            last_grid_y += table_face_slope # add 1 grid_x unit, increase slope grid y unit
+            round_grid_y = int(round(last_grid_y))
+            y_grid_to_search = SERVICE_REGION_COLUMNS + round_grid_y
+            service_column_weigted_grids = grids_weight[grid_x, y_grid_to_search] * SERVICE_REGION_COLUMNS_WEIGHT
+            service_column_weigted_grids_sum = service_column_weigted_grids.sum()
+            # print(service_column_weigted_grids_sum)
+            if service_column_weigted_grids_sum > 0:
+                grid_y_weighted = 1.0 * (service_column_weigted_grids * np.arange(SERVICE_REGION_COLUMNS_WEIGHT.shape[0])).sum() / service_column_weigted_grids_sum
+                grid_y_shift = SERVICE_REGION_COLUMNS[0] + grid_y_weighted
+                grid_y_shift = min(1/3, max(-1/3, grid_y_shift*service_column_weigted_grids_sum/(SERVICE_REGION_PIXEL/2)))
+                grid_y = last_grid_y + grid_y_shift
+            else:
+                grid_y = round_grid_y
+            if grid_x in grid_x_occupy:
+                current_min_grid_y = grid_x_occupy[grid_x]
+                if current_min_grid_y - grid_y <= SERVICE_REGION_PIXEL/GRID_SIZE/2:
+                    grid_y = current_min_grid_y - SERVICE_REGION_PIXEL/GRID_SIZE/2
+            basic_predicted_grid_y = (grid_x - first_grid_id[0])*table_face_slope + first_grid_id[1]
+            if grid_y - basic_predicted_grid_y >= 2:
+                grid_y = basic_predicted_grid_y + 2
+            elif basic_predicted_grid_y - grid_y >= 2:
+                grid_y = basic_predicted_grid_y - 2
+
+            queue_line_weighted_sum.append(service_column_weigted_grids_sum)
+            if len(queue_line_weighted_sum) >= IMAGE_WIDTH//GRID_SIZE//8 and sum(queue_line_weighted_sum) < 300:
+                grid_y = basic_predicted_grid_y
+
+            grid_x_occupy[grid_x] = grid_y
+            queue_line.append((grid_x, grid_y))
+            last_grid_x = grid_x
+            last_grid_y = grid_y
+
+        queue_lines[counter_idx] = queue_line
+        service_regions[counter_idx] = [service_grid_to_search[0], service_grid_to_search[-1]]
+        if draw_service_region:
+            cv2.rectangle(image, get_grid_center(*service_grid_to_search[0]),
+                          get_grid_center(*service_grid_to_search[-1]), COLOR_LIST[counter_idx], thickness=2)
+            if draw_queue_line:
+                for grid_x, grid_y in queue_line:
+                    cv2.circle(image, get_grid_center(grid_x, int(round(grid_y))), 50, COLOR_LIST[counter_idx], thickness=2)
+    return queue_lines, service_regions
 
 
 def output_processor1():
@@ -531,13 +728,22 @@ def output_processor1():
 
 
 def csv_processor(max_queue=10):
-    # fw = open('D1_count_v0-standary_queue.csv', 'w')
-    def _run(frame_idx, queue_count):
+    fw = open('D1_count_v1-flow_queue.csv', 'w')
+    folder_path = 'D1_count_v1'
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
+
+    def _run(frame_idx, queue_count, image=None):
         current_sec = frame_idx // PROCESS_FPS
         if frame_idx % PROCESS_FPS == 0:
             queue_count_str = ','.join(map(str, [queue_count.get(queue_idx, 0) for queue_idx in range(max_queue)]))
             fw.write('%d,%s\n' % (current_sec, queue_count_str))
+
+            if image is not None and current_sec % 15 == 0:
+                file_path = os.path.join(folder_path, '%d.jpg' % current_sec)
+                cv2.imwrite(file_path, image)
     return _run
+
 
 def get_default_desk_positions():
     ground_direction = [(460, 703), (1404, 816)]
@@ -567,7 +773,10 @@ def get_default_desk_positions():
 
 
 def get_slope(point1, point2):
-    return (point2[1] - point1[1]) / (point2[0] - point1[0])
+    if abs(point2[0] - point1[0]) > 0:
+        return (point2[1] - point1[1]) / (point2[0] - point1[0])
+    else:
+        return 0
 
 
 def get_desk_positions(table_face_direction, table_horizontal_direction, desk_positions, table_width_ratio=4/10):
@@ -589,11 +798,7 @@ def get_desk_positions(table_face_direction, table_horizontal_direction, desk_po
         point5 = (point1[0] + (point6[0] - point2[0]),
                   point1[1] + (point6[1] - point2[1]))
         desk_full_positions.append([point1, point2, point3, point4, point5, point6, point7])
-    return desk_full_positions
-
-
-def prepare_service_grips():
-    pass
+    return vertical_slope, desk_full_positions
 
 
 if __name__ == '__main__':
@@ -615,7 +820,7 @@ if __name__ == '__main__':
     checkpoint_dir = os.path.join(base_folder, 'model_output/person/%s/%s/' % (model_folder, train_version))
 
     # sess = get_session(inference_graph_path=inference_graph_path)
-    # sess = get_session(checkpoint_dir=checkpoint_dir)
+    sess = get_session(checkpoint_dir=checkpoint_dir)
 
     BOOTSTRAP_SEC = 1
     image_reader_bootstrap = get_image_reader(video_path=video_path, video_fps=PROCESS_FPS, max_video_length=BOOTSTRAP_SEC,
@@ -627,6 +832,8 @@ if __name__ == '__main__':
     # pickle_path = '/app/powerarena-sense-gym/models/research/pa_utils/project/aa/d1_detections_fps10_resnet101.pkl'
     # pickle_path = '/app/powerarena-sense-gym/models/research/pa_utils/project/aa/IMGP1138_detections_fps5_resnet101_v0.pkl'
     frames_detections = load_detections_pickle(pickle_path)
+    print('frames_detections length', len(frames_detections))
+    frames_detections = None
 
     # IMGP1138
     table_face_direction = [(420, 812), (1579, 962)]
@@ -657,8 +864,8 @@ if __name__ == '__main__':
          [(1442, 156), (1491, 141)],
     ]
 
-    desk_positions = get_desk_positions(table_face_direction, table_horizontal_direction, desk_positions)
+    table_face_slope, desk_positions = get_desk_positions(table_face_direction, table_horizontal_direction, desk_positions)
     # desk_positions = get_default_desk_positions()
-    print('frames_detections length', len(frames_detections))
-    track_detections(frames_detections, image_reader_bootstrap, image_reader, desk_positions=desk_positions,
+    track_detections(frames_detections, image_reader_bootstrap, image_reader, sess=sess,
+                     desk_positions=desk_positions, table_face_slope=table_face_slope,
                      min_score_thresh=min_score_thresh, wait_time=1, output_processor=None)
