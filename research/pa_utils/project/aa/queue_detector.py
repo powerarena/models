@@ -4,6 +4,8 @@ import cv2
 import numpy as np
 import math
 import collections
+import threading
+import queue
 from functools import partial
 from matplotlib import pyplot as plt
 from pa_utils.graph_utils import get_session
@@ -233,13 +235,43 @@ def track_detections(detections, image_reader_bootstrap, image_reader, desk_posi
         return tracks_active
 
     boostrap_detections = dict()
+    input_q = queue.Queue()
+    output_q = queue.Queue()
+    for gpu_idx in range(2):
+        worker = threading.Thread(target=detect_image_by_worker, args=(input_q, output_q, gpu_idx, boostrap_detections))
+        worker.daemon = True
+        worker.start()
+
     # bootstrap 30s
-    for image_idx, image in enumerate(image_reader_bootstrap):
-        if detections is None:
-            output_dict = run_inference_for_single_image(sess, image)
-            boostrap_detections[image_idx] = output_dict
-        else:
-            output_dict = detections[image_idx]
+    ### single thread ###
+    # for image_idx, image in enumerate(image_reader_bootstrap):
+    #     if detections is None:
+    #         output_dict = run_inference_for_single_image(sess, image)
+    #         boostrap_detections[image_idx] = output_dict
+    #     else:
+    #         output_dict = detections[image_idx]
+    ### single thread ###
+
+    ### worker ###
+    finish_loop_input = False
+    enum_bootstrap_reader = enumerate(image_reader_bootstrap)
+    while True:
+        if finish_loop_input and input_q.qsize() == 0 and output_q.qsize() == 0:
+            # skip last 2 frame result
+            break
+
+        if not finish_loop_input and input_q.qsize() < PROCESS_FPS:
+            try:
+                input_image_idx, input_image = next(enum_bootstrap_reader)
+                input_q.put((input_image_idx, input_image))
+            except StopIteration:
+                finish_loop_input = True
+            continue
+
+        image_idx, image, output_dict = output_q.get()
+        boostrap_detections[image_idx] = output_dict
+    ### worker ###
+
         output_dict = output_dict.copy()
 
         remove_detection(output_dict, min_score_thresh=min_score_thresh)
@@ -258,25 +290,41 @@ def track_detections(detections, image_reader_bootstrap, image_reader, desk_posi
     draw_queue_line = False
     draw_queue_region = True
     draw_queue_people = True
-    draw_non_queue_people = True
+    draw_non_queue_people = False
     # basic
     draw_basic_queue_line = False
     draw_basic_queue_region = True
     start = time.time()
-    for image_idx, image in enumerate(image_reader):
-        if image_idx < 0*PROCESS_FPS:
-            if image_idx % PROCESS_FPS == 0:
-                print(image_idx//PROCESS_FPS)
-            continue
-        draw = image_idx % PROCESS_FPS == 0
 
-        if detections is None:
-            if image_idx not in boostrap_detections:
-                output_dict = run_inference_for_single_image(sess, image)
-            else:
-                output_dict = boostrap_detections[image_idx]
-        else:
-            output_dict = detections[image_idx]
+    # for image_idx, image in enumerate(image_reader):
+    #     if detections is None:
+    #         if image_idx not in boostrap_detections:
+    #             output_dict = run_inference_for_single_image(sess, image)
+    #         else:
+    #             output_dict = boostrap_detections[image_idx]
+    #     else:
+    #         output_dict = detections[image_idx]
+
+    ### worker ###
+    finish_loop_input = False
+    enum_reader = enumerate(image_reader)
+    while True:
+        if finish_loop_input and input_q.qsize() == 0 and output_q.qsize() == 0:
+            # skip last 2 frame result
+            break
+
+        if not finish_loop_input and input_q.qsize() < PROCESS_FPS:
+            try:
+                input_image_idx, input_image = next(enum_reader)
+                input_q.put((input_image_idx, input_image))
+            except StopIteration:
+                finish_loop_input = True
+            continue
+
+        image_idx, image, output_dict = output_q.get()
+    ### worker ###
+
+        draw = image_idx % PROCESS_FPS == 0
 
         remove_detection(output_dict, min_score_thresh=min_score_thresh)
         output_dict['detection_boxes'] = np.rint(output_dict['detection_boxes'] * (image.shape[0], image.shape[1], image.shape[0], image.shape[1])).astype(np.int32)
@@ -929,10 +977,27 @@ def get_desk_positions(table_face_direction, table_horizontal_direction, desk_po
     return vertical_slope, desk_full_positions
 
 
+def detect_image_by_worker(input_q, output_q, gpu_device=0, boostrap_detections=None):
+    import tensorflow as tf
+
+    inference_graph_path = '/app/object_detection_app/models/person_inceptionv2/model.pb'
+    graph, sess = get_session(inference_graph_path=inference_graph_path, gpu_device=gpu_device)
+
+    # with graph.as_default():
+    #     with tf.device(device):
+    while True:
+        image_idx, image = input_q.get()
+        if boostrap_detections is not None and image_idx in boostrap_detections:
+            output_dict = boostrap_detections[image_idx]
+        else:
+            output_dict = run_inference_for_single_image(sess, image, graph=graph)
+        output_q.put((image_idx, image, output_dict))
+
+
 if __name__ == '__main__':
-    import os
-    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"  # so the IDs match nvidia-smi
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+    # import os
+    # os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"  # so the IDs match nvidia-smi
+    # os.environ["CUDA_VISIBLE_DEVICES"] = "0, 1"
 
     useRT = False
     min_score_thresh = .5
@@ -996,17 +1061,17 @@ if __name__ == '__main__':
     table_face_slope, desk_positions = get_desk_positions(table_face_direction, table_horizontal_direction, desk_positions)
     # desk_positions = get_default_desk_positions()
 
-    output_video_path = 'D1(VA)2.mp4'
-    fourcc = cv2.VideoWriter_fourcc(*'XVID')
-    video_writer = cv2.VideoWriter(output_video_path, fourcc, 1, (IMAGE_WIDTH, IMAGE_HEIGHT))
-    csv_path = 'D1_count_v1_queue_length2.csv'
-    output_processor = get_output_processor(csv_path=csv_path, video_writer=video_writer)
-    # output_processor = None
+    # output_video_path = 'D1(VA)2.mp4'
+    # fourcc = cv2.VideoWriter_fourcc(*'XVID')
+    # video_writer = cv2.VideoWriter(output_video_path, fourcc, 1, (IMAGE_WIDTH, IMAGE_HEIGHT))
+    # csv_path = 'D1_count_v1_queue_length2.csv'
+    # output_processor = get_output_processor(csv_path=csv_path, video_writer=video_writer)
+    output_processor = None
 
     track_detections(frames_detections, image_reader_bootstrap, image_reader, sess=sess,
                      desk_positions=desk_positions, table_face_slope=table_face_slope,
                      min_score_thresh=min_score_thresh, wait_time=1, output_processor=output_processor)
-    video_writer.release()
+    # video_writer.release()
 
     # queue detection flow:
     # Assume we can transform the video into designed angle.

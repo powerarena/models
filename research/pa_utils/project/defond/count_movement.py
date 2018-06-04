@@ -186,7 +186,7 @@ def check_movement(image_dir=None, video_path=None, max_duration=10,
                 trays_color[tray_idx] = (0, 255, 0)
                 # if wait_time >= 1000:
                 #     image = openpose.render(image)
-        image = openpose.render(image)
+        # image = openpose.render(image)
         skip_tray_counter -= 1
         for tray_idx, count in enumerate(tray_accumulate_counts):
             cv2.putText(image, str(tray_accumulate_counts[tray_idx]), tray_positions[tray_idx][0],
@@ -222,7 +222,7 @@ def check_movement(image_dir=None, video_path=None, max_duration=10,
 
 if __name__ == '__main__':
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"  # so the IDs match nvidia-smi
-    os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
     openpose = get_openpose_model(pose_network=(-1, 368))
     image_path = '/app/powerarena-sense-gym/models/research/pa_utils/data/image_samples/defond/shenzhen-00007-20.jpg'
@@ -233,7 +233,7 @@ if __name__ == '__main__':
     image_folder = '/app/powerarena-sense-gym/models/research/pa_utils/data/image_samples/defond'
 
     video_path = '/home/ma-glass/Downloads/20180413(2).mp4'
-    video_output_path = 'defond(VA).mp4'
+    video_output_path = 'defond(VA) no skeleton.mp4'
     fourcc = cv2.VideoWriter_fourcc(*'XVID')
     video_writer = cv2.VideoWriter(video_output_path, fourcc, 5, (1024, 576))
     check_movement(video_path=video_path, video_writer=video_writer, max_duration=30*60)

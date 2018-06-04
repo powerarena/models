@@ -27,12 +27,18 @@ class MAE(object):
     def add_single_ground_truth_image_info(self, image_id, groundtruth_dict):
         if image_id not in self.result:
             self.result[image_id] = [None, None]
-        self.result[image_id][0] = (groundtruth_dict['groundtruth_classes']==1).sum()
+        if isinstance(groundtruth_dict, int) or isinstance(groundtruth_dict, float):
+            self.result[image_id][0] = groundtruth_dict
+        else:
+            self.result[image_id][0] = (groundtruth_dict['groundtruth_classes']==1).sum()
 
     def add_single_detected_image_info(self, image_id, detections_dict):
         if image_id not in self.result:
             self.result[image_id] = [None, None]
-        self.result[image_id][1] = (detections_dict['detection_classes']==1).sum()
+        if isinstance(detections_dict, int) or isinstance(detections_dict, float):
+            self.result[image_id][1] = detections_dict
+        else:
+            self.result[image_id][1] = (detections_dict['detection_classes']==1).sum()
 
     def add(self, actual_value, forcast_value):
         self.n += 1
@@ -64,7 +70,7 @@ class SMAPE(MAE):
     def add(self, actual_value, forcast_value):
         if abs(actual_value+forcast_value) > 0:
             self.n += 1
-            self.sum += abs(actual_value - forcast_value)/(actual_value+forcast_value)
+            self.sum += 2 * abs(actual_value - forcast_value)/(actual_value+forcast_value)
         else:
             logging.info('**actual_value+forcast_value %s, %s' % (actual_value, forcast_value))
 
@@ -145,7 +151,7 @@ def eval_tf_input(pipeline_config_path):
         print(all_evaluator_metrics)
 
 
-def eval_inference_graph(sess, pipeline_config_path, output_eval_path, min_score_thresh=.5, wait_ms=1):
+def eval_inference_graph(sess, pipeline_config_path, output_eval_path, min_score_thresh=.5, wait_ms=1, useRT=False):
     configs = config_util.get_configs_from_pipeline_file(pipeline_config_path)
 
     # prepare input
@@ -161,16 +167,14 @@ def eval_inference_graph(sess, pipeline_config_path, output_eval_path, min_score
     max_num_classes = max([item.id for item in label_map.item])
     categories = label_map_util.convert_label_map_to_categories(
         label_map, max_num_classes)
+    category_index = label_map_util.create_category_index(categories)
     eval_config = configs['eval_config']
     print(type(eval_config), eval_config)
     evaluators = get_evaluators(eval_config, categories)
     evaluators.extend([MAE(), MSE(), SMAPE(), MAPE()])
     accumulate_time = 0
     num_of_images = 0
-    val_images = list(open('/app/powerarena-sense-gym/people_dataset/VOC2012/ImageSets/Main/val.txt').readlines())
-    num_of_val_images = len(val_images)
-    print('num_of_val_images', num_of_val_images, len(set(val_images)))
-    # num_of_val_images = 100
+    num_of_val_images = eval_config.num_examples
     validate_image_ids = set()
     with sess:
       with tf.Session() as input_sess:
@@ -184,11 +188,12 @@ def eval_inference_graph(sess, pipeline_config_path, output_eval_path, min_score
                 if idx % 10 == 0:
                     logging.info('processing %s/%s' % (idx, num_of_val_images))
                 input_dict = input_sess.run(input_tensor_dict)
+
                 image = input_dict['image']
 
                 # Run inference
                 start_time = time.time()
-                output_dict = run_inference_for_single_image(sess, image)
+                output_dict = run_inference_for_single_image(sess, image, useRT=useRT)
                 accumulate_time += time.time() - start_time
                 num_of_images += 1
 
@@ -201,7 +206,7 @@ def eval_inference_graph(sess, pipeline_config_path, output_eval_path, min_score
                 print('num_detections', output_dict['num_detections'], (input_dict['groundtruth_classes'] == 1).sum())
 
                 image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-                label_image(image, output_dict, None, min_score_thresh=min_score_thresh)
+                label_image(image, output_dict, category_index, min_score_thresh=min_score_thresh)
                 cv2.imshow('frame', image)
                 if cv2.waitKey(wait_ms) & 0xFF == ord('q'):
                     break
@@ -226,69 +231,33 @@ def eval_inference_graph(sess, pipeline_config_path, output_eval_path, min_score
     print('\t'.join([str(all_evaluator_metrics[x]) for x in ['MAE', 'MSE', 'SMAPE', 'MAPE', 'PascalBoxes_PerformanceByCategory/AP@0.5IOU/person']]))
 
 
-def loop_input(pipeline_config_path, input_type='eval'):
-    # import matplotlib
-    # import matplotlib.pyplot as plt
-    # matplotlib.use('TkAgg')
+def eval_shanghaitech(sess, eval_result_path, show_image=False, max_people_count=0, min_score_thresh=.4, wait_ms=1):
+    # prepare evaluators
+    label_map_path = '/app/powerarena-sense-gym/models/research/object_detection/data/person_label_map.pbtxt'
+    label_map = label_map_util.load_labelmap(label_map_path)
+    max_num_classes = max([item.id for item in label_map.item])
+    categories = label_map_util.convert_label_map_to_categories(
+        label_map, max_num_classes)
+    category_index = label_map_util.create_category_index(categories)
 
-    # prepare input
-    def get_next(config):
-        print('config', dataset_builder.build(config))
-        return dataset_util.make_initializable_iterator(
-            dataset_builder.build(config)).get_next()
-
-    configs = config_util.get_configs_from_pipeline_file(pipeline_config_path)
-    if input_type == 'eval':
-        input_config = configs['eval_input_config']
-    else:
-        input_config = configs['train_input_config']
-    create_input_dict_fn = functools.partial(get_next, input_config)
-
-    # val_images = list(open('/app/powerarena-sense-gym/people_dataset/VOC2012/ImageSets/Main/val.txt').readlines())
-    # num_of_val_images = len(val_images)
-    # print('num_of_val_images', num_of_val_images, len(set(val_images)))
-    all_images_ids = set()
-    image_persons_count = []
-    with tf.Session(config=None) as sess:
-        input_tensor_dict = create_input_dict_fn()
-        with tf.contrib.slim.queues.QueueRunners(sess):
-            sess.run(tf.global_variables_initializer())
-            sess.run(tf.local_variables_initializer())
-            sess.run(tf.tables_initializer())
-
-            for idx in range(100000):
-                input_dict = sess.run(input_tensor_dict)
-                if input_dict['source_id'] in all_images_ids:
-                    break
-                all_images_ids.add(input_dict['source_id'])
-                image_persons_count.append((input_dict['groundtruth_classes'] == 1).sum())
-                image = input_dict['image']
-                image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-                cv2.imshow('frame', image)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
-                # time.sleep(1)
-
-                # print(input_dict['filename'], input_dict['image'].shape)
-                if idx % 100 == 0:
-                   print('num of all_images_ids', idx + 1, len(all_images_ids))
-    print('num of all_images_ids', len(all_images_ids))
-
-    # x = np.array(image_persons_count)
-    # n, bins, patches = plt.hist(x, 50, normed=1, facecolor='green', alpha=0.75)
-    # plt.grid(True)
-    # plt.show()
-
-
-def eval_shanghaitech(sess, eval_result_path, show_image=False, min_score_thresh=.4, wait_ms=1):
     fw = None
     if eval_result_path:
         fw = open(eval_result_path, 'w')
+
+    accumulate_time = 0
+    num_of_images = 0
+    sum_gt_person = 0
+    evaluators = [MAE(), MSE(), SMAPE(), MAPE()]
     with sess:
-        for image, points in get_shanghai_data():
+        for idx, (image, points) in enumerate(get_shanghai_data()):
+            if max_people_count > 0 and points.shape[0] > max_people_count:
+                continue
+            sum_gt_person += points.shape[0]
+            num_of_images += 1
             start = time.time()
             # image = image[:, :400, :]
             output_dict = run_inference_for_single_image(sess, resize_image(image, 600, 1024))
+            accumulate_time += time.time() - start
             # #### only person
             # output_dict['num_detections'] = max(output_dict['num_detections'], output_dict['detection_scores'].shape[0])
             # person_indices = np.where(output_dict['detection_classes'] != 1)
@@ -298,15 +267,18 @@ def eval_shanghaitech(sess, eval_result_path, show_image=False, min_score_thresh
             # output_dict['detection_scores'] = np.delete(output_dict['detection_scores'], person_indices, axis=0)
             # ####
             remove_detection(output_dict, min_score_thresh=min_score_thresh)
-            predicted_count = (output_dict['detection_classes'] == 1).sum()
+            predicted_count = float((output_dict['detection_classes'] == 1).sum())
             time_elasped = time.time() - start
             print(time_elasped, predicted_count, points.shape[0])
+            for evaluator in evaluators:
+                evaluator.add_single_ground_truth_image_info(str(idx), points.shape[0])
+                evaluator.add_single_detected_image_info(str(idx), predicted_count)
             if fw:
                 fw.write('%.4f\t%.1f\t%.1f\n' % (time_elasped, predicted_count, points.shape[0]))
                 fw.flush()
             if show_image:
-                label_image(image, output_dict, None, min_score_thresh=min_score_thresh)
-                image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                label_image(image, output_dict, category_index, min_score_thresh=min_score_thresh)
+                image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
                 cv2.imshow('frame', image)
                 key_pressed = cv2.waitKey(wait_ms) & 0xFF
                 if key_pressed == ord('q'):
@@ -315,22 +287,44 @@ def eval_shanghaitech(sess, eval_result_path, show_image=False, min_score_thresh
                     input('Press any key in the console to continue.')
                     # time.sleep(5)
 
+    all_evaluator_metrics = dict()
+    for evaluator in evaluators:
+        metrics = evaluator.evaluate()
+        all_evaluator_metrics.update(metrics)
+    print(all_evaluator_metrics)
+    print('\t'.join([str(all_evaluator_metrics[x]) for x in ['MAE', 'MSE', 'SMAPE', 'MAPE']]))
+    print('Second/Image = %s/%s = %s' % (accumulate_time, num_of_images, accumulate_time / num_of_images))
+    print('Avg Person = %s' % (sum_gt_person/num_of_images))
+
 
 if __name__ == '__main__':
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"  # so the IDs match nvidia-smi
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "1"
     from pa_utils.graph_utils import get_session
 
+    useRT = True
     min_score_thresh = .5
     base_folder = os.path.dirname(__file__)
 
-    checkpoint_dir = '/app/object_detection_app/models'
-    inference_graph_path = os.path.join(checkpoint_dir, 'person_inceptionv2_20180102.pb')
-    model_folder = 'inceptionv2_20180102'
-    pipeline_config_path = os.path.join(base_folder, 'configs/person/faster_rcnn_inception_resnet_v2_atrous.config')
-    sess = get_session(inference_graph_path=inference_graph_path)
-    output_eval_path = os.path.join(os.path.dirname(__file__), 'eval/person_voc2012_%s.txt' % model_folder)
-    # eval_inference_graph(sess, pipeline_config_path, output_eval_path, min_score_thresh=.4, wait_ms=1)
-    file_path = os.path.join(os.path.dirname(__file__), 'eval/person_shanghai_%s.txt' % model_folder)
-    eval_shanghaitech(sess, file_path, show_image=True, wait_ms=1)
+    # loop_input(pipeline_config_path, input_type='eval', wait_time=1)
 
+    # original person model
+    model_folder = 'original_inception_resnet'
+    inference_graph_path = '/app/object_detection_app/models/person_inceptionv2_20180102.pb'
+    pipeline_config_path = os.path.join(base_folder, 'configs/person/faster_rcnn_inception_resnet_v2_atrous.config')
+
+    # train person model
+    model_folder = 'faster_rcnn_resnet101'
+    train_version = 'train_aa_v3'
+    checkpoint_dir = os.path.join(base_folder, 'model_output/person/%s/%s/' % (model_folder, train_version))
+    inference_graph_path = os.path.join(checkpoint_dir, 'inference/frozen_inference_graph.pb')
+
+    session_config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=0.5))
+    graph, sess = get_session(inference_graph_path=inference_graph_path, config=session_config, useRT=useRT)
+    # graph, sess = get_session(checkpoint_dir=checkpoint_dir)
+
+    output_eval_path = os.path.join(os.path.dirname(__file__), 'eval/person_voc2012_%s.txt' % model_folder)
+    eval_inference_graph(sess, pipeline_config_path, output_eval_path, min_score_thresh=min_score_thresh, wait_ms=1, useRT=useRT)
+
+    # file_path = os.path.join(os.path.dirname(__file__), 'eval/person_shanghai_%s.txt' % model_folder)
+    # eval_shanghaitech(sess, file_path, max_people_count=60, show_image=True, min_score_thresh=min_score_thresh, wait_ms=1)

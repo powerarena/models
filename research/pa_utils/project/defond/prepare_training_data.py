@@ -3,6 +3,7 @@ import os
 
 import cv2
 import numpy as np
+import tensorflow as tf
 from pa_utils.data.data_utils import resize_image
 from pa_utils.openpose_utils import get_openpose_model
 from pa_utils.project.defond.count_movement import get_tray_operators, tray_positions, get_center, person_positions
@@ -142,16 +143,31 @@ if __name__ == '__main__':
     from keras.layers import LSTM, Dense, Dropout
 
     print(x.shape)
+    # # model 1
+    # model = Sequential()
+    # model.add(LSTM(100, input_shape=(20, feature_number,), return_sequences=True))
+    # model.add(LSTM(32, return_sequences=True))  # returns a sequence of vectors of dimension 32
+    # model.add(LSTM(32))
+    # model.add(Dropout(0.5))
+    # model.add(Dense(1, activation='sigmoid'))
+    # model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+    # print(model.summary())
+    # model.fit(x.reshape(-1, 20, feature_number), y, epochs=50, batch_size=10, verbose=1)
+    # model.save('defond_keras_lstm.h5')
+
+    # model 2
     model = Sequential()
-    model.add(LSTM(100, input_shape=(20, feature_number,), return_sequences=True))
-    model.add(LSTM(32, return_sequences=True))  # returns a sequence of vectors of dimension 32
-    model.add(LSTM(32))
-    model.add(Dropout(0.5))
+    lstm = tf.contrib.cudnn_rnn.CudnnLSTM(
+        num_layers=3,
+        num_units=128,
+        dropout=0.3,
+        direction="bidirectional")
+    model(lstm)
     model.add(Dense(1, activation='sigmoid'))
     model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
     print(model.summary())
     model.fit(x.reshape(-1, 20, feature_number), y, epochs=50, batch_size=10, verbose=1)
-    model.save('defond_keras_lstm.h5')
+    model.save('defond_keras_lstm_v2.h5')
 
-    model = load_model('defond_keras_lstm.h5')
+    model = load_model('defond_keras_lstm_v2.h5')
     print(((model.predict(x.reshape(-1, 20, feature_number))>0.5).astype(np.int).reshape(-1) == y).sum(), y.size)

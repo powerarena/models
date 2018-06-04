@@ -38,6 +38,10 @@ if __name__ == '__main__':
     time_wait = initial_time_wait = 100
     is_pause = False
 
+    # AA
+    image_dir = '/mnt/2630afa8-db60-478d-ac09-0af3b44bead6/Dataset/Project/AA/D1/JPEGImages'
+    image_path = os.path.join(image_dir, 'aa-D1-00300-00.jpg')
+
     image = cv2.imread(image_path)
     image = resize_image(image, 600, 1024)
     start = time.time()

@@ -1,11 +1,21 @@
+import time
 import numpy as np
 import tensorflow as tf
 from object_detection.utils import ops as utils_ops
 
 
-def run_inference_for_single_image(sess, image, detect_mask=False, feature_map=False):
+def get_key(key, useRT=False):
+    if useRT:
+        return 'import/' + key
+    return key
+
+
+def run_inference_for_single_image(sess, image, graph=None, detect_mask=False, feature_map=False, useRT=False):
+    if graph is None:
+        graph = tf.get_default_graph()
+
     # Get handles to input and output tensors
-    ops = tf.get_default_graph().get_operations()
+    ops = graph.get_operations()
     all_tensor_names = {output.name for op in ops for output in op.outputs}
     tensor_dict = {}
     tensor_keys = [
@@ -20,9 +30,10 @@ def run_inference_for_single_image(sess, image, detect_mask=False, feature_map=F
 
     for key in tensor_keys:
         tensor_name = key + ':0'
-        if tensor_name in all_tensor_names:
-            tensor_dict[key] = tf.get_default_graph().get_tensor_by_name(
-                tensor_name)
+        if get_key(tensor_name, useRT) in all_tensor_names:
+            tensor_dict[key] = graph.get_tensor_by_name(get_key(tensor_name, useRT))
+        else:
+            print('tensor %s not exists' % get_key(tensor_name, useRT))
     if 'detection_masks' in tensor_dict:
         # The following processing is only for single image
         detection_boxes = tf.squeeze(tensor_dict['detection_boxes'], [0])
@@ -38,12 +49,11 @@ def run_inference_for_single_image(sess, image, detect_mask=False, feature_map=F
         # Fol`low the convention by adding back the batch dimension
         tensor_dict['detection_masks'] = tf.expand_dims(
             detection_masks_reframed, 0)
-    image_tensor = tf.get_default_graph().get_tensor_by_name('image_tensor:0')
+    image_tensor = graph.get_tensor_by_name(get_key('image_tensor:0', useRT))
 
     # Run inference
     output_dict = sess.run(tensor_dict,
                          feed_dict={image_tensor: np.expand_dims(image, 0)})
-
     # all outputs are float32 numpy arrays, so convert types as appropriate
     output_dict['num_detections'] = int(output_dict['num_detections'][0])
     output_dict['detection_classes'] = output_dict['detection_classes'][0].astype(np.uint8)
