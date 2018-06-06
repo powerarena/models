@@ -1,4 +1,5 @@
 import time
+import cv2
 import numpy as np
 import tensorflow as tf
 from object_detection.utils import ops as utils_ops
@@ -10,7 +11,7 @@ def get_key(key, useRT=False):
     return key
 
 
-def run_inference_for_single_image(sess, image, graph=None, detect_mask=False, feature_map=False, useRT=False):
+def run_inference_for_single_image(sess, image, graph=None, detect_mask=False, feature_map=False, is_rgb_color=True, useRT=False):
     if graph is None:
         graph = tf.get_default_graph()
 
@@ -52,8 +53,12 @@ def run_inference_for_single_image(sess, image, graph=None, detect_mask=False, f
     image_tensor = graph.get_tensor_by_name(get_key('image_tensor:0', useRT))
 
     # Run inference
+    if is_rgb_color:
+        image_bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    else:
+        image_bgr = image
     output_dict = sess.run(tensor_dict,
-                         feed_dict={image_tensor: np.expand_dims(image, 0)})
+                         feed_dict={image_tensor: np.expand_dims(image_bgr, 0)})
     # all outputs are float32 numpy arrays, so convert types as appropriate
     output_dict['num_detections'] = int(output_dict['num_detections'][0])
     output_dict['detection_classes'] = output_dict['detection_classes'][0].astype(np.uint8)

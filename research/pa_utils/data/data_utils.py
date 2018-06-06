@@ -64,13 +64,16 @@ def get_video_info(video_path, known_fps=None):
     return length, width, height, fps
 
 
-def read_video(video_path, frame_freq=None, output_minmax_size=None):
+def read_video(video_path, frame_freq=None, crop_region=None, output_minmax_size=None):
     video = cv2.VideoCapture(video_path)
     frame_idx = 0
     while (video.isOpened()):
         ret, frame = video.read()
         if ret:
             if frame_freq is None or frame_idx % frame_freq < 1:
+                if crop_region is not None:
+                    y1, x1, y2, x2 = crop_region
+                    frame = frame[y1:y2, x1:x2]
                 if output_minmax_size is None:
                     yield frame
                 else:
@@ -82,7 +85,8 @@ def read_video(video_path, frame_freq=None, output_minmax_size=None):
     cv2.destroyAllWindows()
 
 
-def get_image_reader(image_dir=None, video_path=None, video_fps=1, max_video_length=0, output_minmax_size=None):
+def get_image_reader(image_dir=None, video_path=None, video_fps=1, skip_video_seconds=0, max_video_length=0,
+                     crop_region=None, output_minmax_size=None):
     if image_dir:
         for idx, image_file in enumerate(sorted(os.listdir(image_dir))):
             image_path = os.path.join(image_dir, image_file)
@@ -94,7 +98,9 @@ def get_image_reader(image_dir=None, video_path=None, video_fps=1, max_video_len
     elif video_path:
         length, width, height, fps = get_video_info(video_path)
         frame_freq = fps / video_fps
-        for idx, image in enumerate(read_video(video_path, frame_freq=frame_freq, output_minmax_size=output_minmax_size)):
+        for idx, image in enumerate(read_video(video_path, frame_freq=frame_freq, crop_region=crop_region, output_minmax_size=output_minmax_size)):
+            if idx < video_fps*skip_video_seconds:
+                continue
             if not max_video_length or idx < video_fps*max_video_length:
                 yield image
             else:
@@ -179,6 +185,7 @@ def get_color_list(return_rgb=False):
         color_list = map(lambda x: matplotlib.colors.cnames[x], color_list)
         return list(map(lambda x: tuple(int(x.lstrip('#')[i:i + 2], 16) for i in (0, 2, 4)), color_list))
     return color_list
+
 
 # import json
 # import time
