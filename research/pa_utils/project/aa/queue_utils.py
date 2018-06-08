@@ -848,9 +848,9 @@ def estimate_queue_time_based_on_queues_count(queue_time_output_path, queues_cou
                                           first_group_num=first_group_num)
         for sec, queue_count in enumerate(queue_count_list):
             queue_time_model.process_next_second(sec + 1, queue_count)
-        print(queue_idx, queue_time_model.get_stats())
-        print('finish_people', queue_time_model.finish_people)
-        print('unfinish_people', queue_time_model.unfinish_people)
+        # print(queue_idx, queue_time_model.get_stats())
+        # print('finish_people', queue_time_model.finish_people)
+        # print('unfinish_people', queue_time_model.unfinish_people)
         if len(queue_time_model.finish_people) > 0:
             estimated_queues_time[queue_idx] = queue_time_model.get_stats()
 

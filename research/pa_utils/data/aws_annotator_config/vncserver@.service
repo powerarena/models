@@ -1,0 +1,16 @@
+[Unit]
+Description=Start TightVNC server at startup
+After=syslog.target network.target
+
+[Service]
+Type=forking
+User=annotator%i
+PAMName=login
+PIDFile=/home/annotator%i/.vnc/%H:4864%i.pid
+ExecStartPre=-/usr/bin/vncserver -kill :4864%i > /dev/null 2>&1
+ExecStart=/usr/bin/vncserver -depth 24 -geometry 1920x1080 :4864%i
+ExecStop=/usr/bin/vncserver -kill :4864%i
+
+
+[Install]
+WantedBy=multi-user.target

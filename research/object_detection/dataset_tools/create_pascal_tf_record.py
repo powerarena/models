@@ -52,10 +52,10 @@ flags.DEFINE_boolean('ignore_difficult_instances', False, 'Whether to ignore '
                      'difficult instances')
 FLAGS = flags.FLAGS
 
-SETS = ['train', 'val', 'trainval', 'test']
+SETS = ['train', 'val', 'trainval', 'test', 'all']
 YEARS = ['VOC2007', 'VOC2012', 'merged']
 
-
+label_count = dict(total=0)
 def dict_to_tf_example(data,
                        dataset_directory,
                        label_map_dict,
@@ -105,7 +105,7 @@ def dict_to_tf_example(data,
   poses = []
   difficult_obj = []
     
-  if data.has_key('object'):
+  if 'object' in data:
     for obj in data['object']:
       difficult = bool(int(obj['difficult']))
       if ignore_difficult_instances and difficult:
@@ -121,6 +121,9 @@ def dict_to_tf_example(data,
       classes.append(label_map_dict[obj['name']])
       truncated.append(int(obj['truncated']))
       poses.append(obj['pose'].encode('utf8'))
+      label_count[obj['name']] = label_count.get(obj['name'], 0) + 1
+    if len(data['object']) > 0:
+      label_count['total'] += 1
 
   example = tf.train.Example(features=tf.train.Features(feature={
       'image/height': dataset_util.int64_feature(height),
@@ -146,10 +149,12 @@ def dict_to_tf_example(data,
 
 
 def main(_):
-  if FLAGS.set not in SETS:
-    raise ValueError('set must be in : {}'.format(SETS))
-  if FLAGS.year not in YEARS:
-    raise ValueError('year must be in : {}'.format(YEARS))
+  # if FLAGS.set not in SETS:
+  #   raise ValueError('set must be in : {}'.format(SETS))
+  # if FLAGS.year not in YEARS:
+  #   raise ValueError('year must be in : {}'.format(YEARS))
+
+  print('hard code folder to FLAGS.year', FLAGS.year)
 
   data_dir = FLAGS.data_dir
   years = ['VOC2007', 'VOC2012']
@@ -162,10 +167,17 @@ def main(_):
 
   for year in years:
     logging.info('Reading from PASCAL %s dataset.', year)
-    examples_path = os.path.join(data_dir, year, 'ImageSets', 'Main',
-                                 'aeroplane_' + FLAGS.set + '.txt')
     annotations_dir = os.path.join(data_dir, year, FLAGS.annotations_dir)
-    examples_list = dataset_util.read_examples_list(examples_path)
+    if FLAGS.set == 'all':
+        annotation_set = [f[:-4] for f in os.listdir(annotations_dir) if f.endswith('.xml')]
+        images_dir = os.path.join(data_dir, year, 'JPEGImages')
+        image_set = [f[:-4] for f in os.listdir(images_dir) if f.endswith('.jpg')]
+        print(set(annotation_set) - set(image_set))
+        examples_list = sorted(list(set(annotation_set) & set(image_set)))
+    else:
+        examples_path = os.path.join(data_dir, year, 'ImageSets', 'Main',
+                                     'aeroplane_' + FLAGS.set + '.txt')
+        examples_list = dataset_util.read_examples_list(examples_path)
     for idx, example in enumerate(examples_list):
       if idx % 100 == 0:
         logging.info('On image %d of %d', idx, len(examples_list))
@@ -174,11 +186,11 @@ def main(_):
         xml_str = fid.read()
       xml = etree.fromstring(xml_str)
       data = dataset_util.recursive_parse_xml_to_dict(xml)['annotation']
-
+      data['folder'] = FLAGS.year
       tf_example = dict_to_tf_example(data, FLAGS.data_dir, label_map_dict,
                                       FLAGS.ignore_difficult_instances)
       writer.write(tf_example.SerializeToString())
-
+    print(label_count)
   writer.close()
 
 

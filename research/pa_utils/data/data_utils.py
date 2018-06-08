@@ -64,8 +64,9 @@ def get_video_info(video_path, known_fps=None):
     return length, width, height, fps
 
 
-def read_video(video_path, frame_freq=None, crop_region=None, output_minmax_size=None):
+def read_video(video_path, frame_freq=None, skip_frames=0, crop_region=None, output_minmax_size=None):
     video = cv2.VideoCapture(video_path)
+    video.set(cv2.CAP_PROP_POS_FRAMES, skip_frames)
     frame_idx = 0
     while (video.isOpened()):
         ret, frame = video.read()
@@ -161,17 +162,17 @@ def get_pascal_xml_data(xml_path):
         xml_str = fid.read()
     xml = etree.fromstring(xml_str)
     data = dataset_util.recursive_parse_xml_to_dict(xml)['annotation']
-    # print(data['object'][0])
-    for obj in data['object']:
-        bbox = obj['bndbox']
-        obj['bndbox'] = dict(xmin=int(bbox['xmin']),
-                             ymin=int(bbox['ymin']),
-                             xmax=int(bbox['xmax']),
-                             ymax=int(bbox['ymax']))
-        xmin, ymin, xmax, ymax = obj['bndbox']['xmin'], obj['bndbox']['ymin'], obj['bndbox']['xmax'], obj['bndbox']['ymax']
-        center = ((xmin + xmax) / 2, (ymin + ymax) / 2)
-        obj['center'] = center
-    return data['size'], data['path'], data['object']
+    if 'object' in data:
+        for obj in data['object']:
+            bbox = obj['bndbox']
+            obj['bndbox'] = dict(xmin=int(bbox['xmin']),
+                                 ymin=int(bbox['ymin']),
+                                 xmax=int(bbox['xmax']),
+                                 ymax=int(bbox['ymax']))
+            xmin, ymin, xmax, ymax = obj['bndbox']['xmin'], obj['bndbox']['ymin'], obj['bndbox']['xmax'], obj['bndbox']['ymax']
+            center = ((xmin + xmax) / 2, (ymin + ymax) / 2)
+            obj['center'] = center
+    return data['size'], data['path'], data.get('object', [])
 
 
 def get_color_list(return_rgb=False):

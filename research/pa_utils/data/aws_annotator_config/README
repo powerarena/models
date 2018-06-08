@@ -1,0 +1,29 @@
+#config as following, especially Step 4 — Creating a VNC Service File
+https://www.digitalocean.com/community/tutorials/how-to-install-and-configure-vnc-on-ubuntu-16-04
+sudo nano /etc/systemd/system/vncserver@.service
+sudo systemctl daemon-reload
+sudo systemctl enable vncserver@1.service
+sudo systemctl stop vncserver@1
+
+
+# config desktop panel
+# disable screensaver (high cpu) by 'xscreensaver-demo', then disable it (and then .xscreensaver will be created)
+https://people.gnome.org/~shaunm/admin-guide/screensavers-2.html
+# disable screensaver (high cpu) by dconf-editor (not sure if necessary)
+gsettings set org.gnome.desktop.screensaver lock-delay 3600
+gsettings set org.gnome.desktop.screensaver lock-enabled false
+gsettings set org.gnome.desktop.screensaver idle-activation-enabled false
+
+# after config annotator1's desktop, copy to the configs to /etc/skel, so that other new user will have same config
+sudo mkdir /etc/skel/.config
+sudo cp -r /home/annotator1/.config/xfce4 /etc/skel/.config/
+sudo cp -r /home/annotator1/.config/dconf /etc/skel/.config/
+sudo cp /home/annotator1/.xscreensaver /etc/skel
+
+
+# user account
+User password: P@ssw0rd
+VNC password: P@Annota
+
+# server side:
+sudo systemctl start vncserver@1
