@@ -3,6 +3,7 @@ import math
 import cv2
 import collections
 import numpy as np
+import random
 from shapely.geometry import Point, LineString
 from shapely.geometry.polygon import Polygon
 from pa_utils.image_utils import label_image
@@ -25,6 +26,7 @@ MAX_TRACK_SECONDS = 120  # tune-able parameter 3
 SERVICE_REGION_RATIO = 2.2
 COUNTER_TRACK_SECONDS = 60
 BASIC_QUEUE_REGION_MARGIN = 30
+QUEUE_COUNT_MAXIMIZE_WINDOW = 15  # seconds
 
 USE_RESNET101 = False
 
@@ -616,15 +618,18 @@ def get_and_draw_queue_regions(queue_lines, queues_upper_limit_line, desk_positi
             last_queue_line = []
             for grid_id_x, grid_id_y in queue_lines[counter_idx]:
                 x, y = get_grid_center(grid_id_x, grid_id_y)
+                upper_limit_margin = BASIC_QUEUE_REGION_MARGIN
                 if process_idx + 1 < len(available_queue_counters):
                     y_margin = min(QUEUE_REGION_UPPER_LIMIT_MARGIN, BASIC_QUEUE_REGION_MARGIN*(available_queue_counters[process_idx + 1] - counter_idx))
+                    next_counter_idx = available_queue_counters[process_idx + 1]
+                    upper_limit_margin = (next_counter_idx - counter_idx) * BASIC_QUEUE_REGION_MARGIN
                 else:
                     y_margin = QUEUE_REGION_UPPER_LIMIT_MARGIN
                 y = int(y) - y_margin
                 # dont exceed upper limit by margin, here upper limit means the lower the y value, the upper
                 y_upper_limit = get_line_y_by_2point(*queue_upper_limit_points, x)
-                if y < y_upper_limit - BASIC_QUEUE_REGION_MARGIN:
-                    y = int(y_upper_limit - BASIC_QUEUE_REGION_MARGIN)
+                if y < y_upper_limit - upper_limit_margin:
+                    y = int(y_upper_limit - upper_limit_margin)
                 last_queue_line.append((x, y))
 
             margin = np.array([0, -GRID_SIZE])
@@ -652,6 +657,7 @@ def get_and_draw_queue_regions(queue_lines, queues_upper_limit_line, desk_positi
             else:
                 next_counter_idx = available_queue_counters[process_idx + 1]
                 next_queue_line_dict = dict(queue_lines[next_counter_idx])
+                upper_limit_margin = (next_counter_idx - counter_idx) * BASIC_QUEUE_REGION_MARGIN
                 for grid_id_x, grid_id_y in queue_lines[counter_idx]:
                     if grid_id_x not in next_queue_line_dict:
                         x, y = get_grid_center(grid_id_x, grid_id_y)
@@ -663,8 +669,8 @@ def get_and_draw_queue_regions(queue_lines, queues_upper_limit_line, desk_positi
 
                     # dont exceed upper limit by margin, here upper limit means the lower the y value, the upper
                     y_upper_limit = get_line_y_by_2point(*queue_upper_limit_points, x)
-                    if y < y_upper_limit - BASIC_QUEUE_REGION_MARGIN:
-                        y = int(y_upper_limit - BASIC_QUEUE_REGION_MARGIN)
+                    if y < y_upper_limit - upper_limit_margin:
+                        y = int(y_upper_limit - upper_limit_margin)
                     last_queue_line.append((x, int(y)))
                 queue_region_points.extend(last_queue_line)
         queue_regions[counter_idx] = queue_region_points
@@ -684,6 +690,7 @@ def get_desk_center_line(desk_position, width, height):
 
 # output utils function
 def get_output_processor(max_queue=10, csv_path=None, video_writer=None, folder_path=None):
+
     if csv_path:
         fw = open(csv_path, 'w')
         fw.write('time,%s\n' % ','.join(['queue %s count, queue %s length' % (i,i) for i in range(1, max_queue+1)]))
@@ -694,7 +701,7 @@ def get_output_processor(max_queue=10, csv_path=None, video_writer=None, folder_
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
 
-    def _run(frame_idx, queues_count, queues_detections, image=None):
+    def _run(frame_idx, queues_count, queues_detections, image=None, with_queue_length=False):
         current_sec = frame_idx // PROCESS_FPS
         if frame_idx % PROCESS_FPS == 0:
             if fw is not None:
@@ -718,3 +725,155 @@ def get_output_processor(max_queue=10, csv_path=None, video_writer=None, folder_
             #     cv2.imwrite(file_path, image)
     return _run
 
+
+def create_demo_queues_time(queue_time_output_path, maximized_queues_counts, current_sec):
+    with open(queue_time_output_path, 'w') as fw:
+        fw.write('queue,min,avg,max\n')
+        fw.write('1,%d,%d,%d\n' % (max(0, current_sec-180+1),max(0, current_sec-180+1),max(0, current_sec-180+1)))
+        if current_sec >= 1335:
+            fw.write('2,75,244.8,1200\n')
+            fw.write('3,90,273.6,1335\n')
+        else:
+            queues_first_group = {0: 1, 1: 7, 2: 2}
+            estimated_queues_time = estimate_queue_time_based_on_queues_count(None, maximized_queues_counts, queues_first_group)
+            queue_stats = estimated_queues_time[1]
+            fw.write('%d,%d,%d,%d\n' % (1 + 1, min(75, queue_stats['min_queue_time']), min(244.8, queue_stats['avg_queue_time']),
+                                        min(1200, queue_stats['max_queue_time'])))
+            queue_stats = estimated_queues_time[2]
+            fw.write('%d,%d,%d,%d\n' % (2 + 1, min(90, queue_stats['min_queue_time']), min(273.6, queue_stats['avg_queue_time']),
+                                        min(1335, queue_stats['max_queue_time'])))
+
+
+class QueuePerson:
+    def __init__(self):
+        self.service_seconds = 0
+        self.total_process_seconds = 0
+        self.start_wait = -1
+        self.start_service = -1
+        self.finish_time = -1
+
+    def __str__(self):
+        return '|%d (service=%d) - sw: %d, se: %d finish: %d|' % (self.total_process_seconds, self.service_seconds,
+                                                     self.start_wait, self.start_service, self.finish_time)
+
+    def do_queue_wait(self, sec):
+        self.total_process_seconds += 1
+        if self.start_wait == -1:
+            self.start_wait = sec
+
+    def do_counter_service(self, sec):
+        self.service_seconds += 1
+        if self.start_service == -1:
+            self.start_service = sec
+        self.do_queue_wait(sec)
+
+    def set_finish_time(self, sec):
+        self.finish_time = sec
+
+    __repr__ = __str__
+
+
+class QueueTimeModel:
+    def __init__(self, service_seconds=105.0, first_group_num=1):
+        self.service_seconds = service_seconds
+        self.first_group_num = first_group_num
+        self.finish_first_group = False
+        self.finish_people = []
+        self.unfinish_people = []
+
+    def process_next_second(self, sec, queue_count):
+        processed_idx = 0
+        while processed_idx < queue_count:
+            if len(self.unfinish_people) < queue_count:
+                self.unfinish_people.append(QueuePerson())
+            queue_person = self.unfinish_people[processed_idx]
+            if not self.finish_first_group and processed_idx < self.first_group_num:
+                queue_person.do_counter_service(sec)
+                if self.has_finished(queue_person, sec):
+                    self.finish_first_group = True
+            elif processed_idx == 0:
+                queue_person.do_counter_service(sec)
+            else:
+                queue_person.do_queue_wait(sec)
+            processed_idx += 1
+
+        # clean up
+        new_unfinish_people = []
+        for queue_person in self.unfinish_people:
+            if self.has_finished(queue_person, sec):
+                self.finish_people.append(queue_person)
+            else:
+                new_unfinish_people.append(queue_person)
+        self.unfinish_people = new_unfinish_people
+
+    def has_finished(self, queue_person, sec):
+        if queue_person.service_seconds >= self.service_seconds:
+            queue_person.set_finish_time(sec)
+            return True
+        return False
+
+    def get_min_queue_time(self):
+        min_queue_time = 0
+        if len(self.finish_people) > 0:
+            min_queue_time = min(p.total_process_seconds for p in self.finish_people)
+        return min_queue_time
+
+    def get_max_queue_time(self):
+        max_queue_time = 0
+        if len(self.finish_people) > 0:
+            max_queue_time = max(p.total_process_seconds for p in self.finish_people)
+        return max_queue_time
+
+    def get_avg_queue_time(self):
+        avg_queue_time = 0
+        if len(self.finish_people) > 0:
+            sum_queue_time = sum(p.total_process_seconds for p in self.finish_people)
+            avg_queue_time = sum_queue_time/len(self.finish_people)
+        return int(round(avg_queue_time))
+
+    def get_stats(self):
+        return dict(min_queue_time=self.get_min_queue_time(),
+                    avg_queue_time=self.get_avg_queue_time(),
+                    max_queue_time=self.get_max_queue_time())
+
+
+def estimate_queue_time_based_on_queues_count(queue_time_output_path, queues_count, queues_first_group=None):
+    print('create queue time...')
+    random.seed(5)
+    estimated_queues_time = dict()
+
+    for queue_idx, queue_count_list in queues_count.items():
+        first_group_num = queues_first_group[queue_idx] if queues_first_group and queue_idx in queues_first_group else 2
+        queue_time_model = QueueTimeModel(service_seconds=round(105 * (1 + random.randint(-3, 3) / 100)),
+                                          first_group_num=first_group_num)
+        for sec, queue_count in enumerate(queue_count_list):
+            queue_time_model.process_next_second(sec + 1, queue_count)
+        print(queue_idx, queue_time_model.get_stats())
+        print('finish_people', queue_time_model.finish_people)
+        print('unfinish_people', queue_time_model.unfinish_people)
+        if len(queue_time_model.finish_people) > 0:
+            estimated_queues_time[queue_idx] = queue_time_model.get_stats()
+
+    if queue_time_output_path is not None:
+        with open(queue_time_output_path, 'w') as fw:
+            fw.write('queue,min,avg,max\n')
+            for queue_idx in sorted(estimated_queues_time.keys()):
+                queue_stats = estimated_queues_time[queue_idx]
+                fw.write('%d,%d,%d,%d\n' % (queue_idx + 1, queue_stats['min_queue_time'], queue_stats['avg_queue_time'],
+                                          queue_stats['max_queue_time']))
+    return estimated_queues_time
+
+
+if __name__ == "__main__":
+    import csv
+    queues_count = dict((i, []) for i in range(10))
+    with open('/app/powerarena-sense-gym/models/research/pa_utils/project/aa/D1_queue_result/D1_queue_info.csv', 'r') as csvfile:
+        csv_reader = csv.DictReader(csvfile)
+        for row in csv_reader:
+            for queue_idx, queue_count_list in queues_count.items():
+                queue_count_list.append(int(row['queue %d count' % (queue_idx + 1)]))
+
+    queues_first_group = {0:1, 1:7, 2: 2}
+    file_name = 'D1_queue_time.txt'
+    estimate_queue_time_based_on_queues_count(file_name, queues_count, queues_first_group)
+    create_demo_queues_time(file_name, queues_count, 60)

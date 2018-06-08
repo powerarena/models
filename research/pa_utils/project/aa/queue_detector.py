@@ -1,3 +1,4 @@
+import os
 import time
 import cv2
 import numpy as np
@@ -18,13 +19,15 @@ from pa_utils.project.aa.queue_utils import bbox_center, get_nearest_grid_id, ma
     filter_detections_inside_regions, detect_image_by_worker, get_desk_positions, get_output_processor
 # parameters
 from pa_utils.project.aa.queue_utils import PROCESS_FPS, MAX_TRACK_SECONDS, IMAGE_HEIGHT, IMAGE_WIDTH, \
-    MAX_QUEUE_NUMBER, MIN_SCORE_THRESHOLD, MAX_QUEUE_GAP, COUNTER_TRACK_SECONDS
+    MAX_QUEUE_NUMBER, MIN_SCORE_THRESHOLD, MAX_QUEUE_GAP, COUNTER_TRACK_SECONDS, QUEUE_COUNT_MAXIMIZE_WINDOW
 # counters
-from pa_utils.project.aa.queue_utils import detect_counters, get_counter_staff_indices, get_service_region_parameter
+from pa_utils.project.aa.queue_utils import detect_counters, get_counter_staff_indices, get_service_region_parameter, \
+    estimate_queue_time_based_on_queues_count, create_demo_queues_time
 
 
 DEMO = False
 BOOTSTRAP_SEC = 30
+DEFAULT_SKIP_SECONDS_FOR_AVAILABLE_COUNTERS = 18
 
 
 def iou(bbox1, bbox2):
@@ -124,6 +127,8 @@ def track_grids(grid_detection_history, tracks_active, frame_idx):
 
 
 def track_detections(detections, image_reader_bootstrap, image_reader, detection_roi_masks, desk_positions, table_face_slope,
+                     queue_time_output_path,
+                     avilable_counters_skip_seconds=DEFAULT_SKIP_SECONDS_FOR_AVAILABLE_COUNTERS,
                      wait_time=3, max_queue_gap=IMAGE_WIDTH/4,
                      known_available_counters=None,
                      output_processor=None):
@@ -150,7 +155,8 @@ def track_detections(detections, image_reader_bootstrap, image_reader, detection
     tracks_active = []
     track_id_start = 1
     service_region_parameters = get_service_region_parameter(desk_positions)
-    queues_count_history = collections.defaultdict(partial(collections.deque, maxlen=15))  # queue_count_maximize_window = 15
+    queues_count_history = collections.defaultdict(partial(collections.deque, maxlen=QUEUE_COUNT_MAXIMIZE_WINDOW))
+    maximized_queues_counts = collections.defaultdict(list)
 
     def _process_people_flow(image_idx, output_dict, all_counters, tracks_active, track_id_start, grid_detection_history, draw_staff=False):
         # remove counter staff detection
@@ -243,6 +249,7 @@ def track_detections(detections, image_reader_bootstrap, image_reader, detection
 
     finish_loop_input = False
     enum_reader = enumerate(image_reader)
+    current_sec = 0
     while True:
         if detections is None:
             ### worker ###
@@ -280,7 +287,7 @@ def track_detections(detections, image_reader_bootstrap, image_reader, detection
 
         tracks_active = _process_people_flow(image_idx, output_dict, all_counters, tracks_active, track_id_start, grid_detection_history, draw_staff=draw_staff)
 
-        if known_available_counters is None or (image_idx // PROCESS_FPS) <= 18:
+        if known_available_counters is None or (image_idx // PROCESS_FPS) <= avilable_counters_skip_seconds:
             available_counters = detect_counters(all_counters, image_idx)
         else:
             available_counters = known_available_counters
@@ -323,22 +330,33 @@ def track_detections(detections, image_reader_bootstrap, image_reader, detection
             queues_count = maximize_counts(queues_count_history)
             if DEMO:
                 queues_count = process_raw_demo_queues_count(current_sec, queues_count)
+
+            for queue_idx in queues_count:
+                maximized_queues_counts[queue_idx].append(queues_count[queue_idx])
+
             # visual stat
             draw_queue_stats(current_sec, image, queues_count, desk_positions)
 
             cv2.imshow('frame', image)
             if cv2.waitKey(wait_time) & 0xFF == ord('q'):
-                return
+                break
 
             if output_processor:
                 output_processor(image_idx, queues_count, queue_detections, image=image)
 
         print(image_idx, time.time() - start)
         start = time.time()
+
+    if DEMO:
+        create_demo_queues_time(queue_time_output_path, maximized_queues_counts, current_sec)
+    else:
+        estimate_queue_time_based_on_queues_count(queue_time_output_path, maximized_queues_counts)
     cv2.destroyAllWindows()
 
 
 def get_configs(video_path):
+    avilable_counters_skip_seconds = DEFAULT_SKIP_SECONDS_FOR_AVAILABLE_COUNTERS
+
     # IMGP1138
     if video_path.lower().endswith('IMGP1138.MOV'.lower()):
         table_face_direction = [(420, 812), (1579, 962)]
@@ -353,7 +371,8 @@ def get_configs(video_path):
             [1584, 1631, 1731, ],
             [1733, 1783, 1882, ],
         ]
-        known_acs = [0, 1, 2, 3, 4, 5, 6]
+        initial_known_acs = [0, 1, 2, 3, 4, 5, 6]
+        avilable_counters_skip_seconds = 1
     elif video_path.lower().endswith('D1.mp4'.lower()):
         # D1
         table_face_direction = [(460, 703), (1404, 816)]
@@ -371,7 +390,7 @@ def get_configs(video_path):
              [1308, 1335, 1384, ],
              [1410, 1442, 1486, ],
         ]
-        known_acs = [0, 1, 2]
+        initial_known_acs = [0, 1, 2]
     elif video_path.lower().endswith('C0014.MP4'.lower()):
         # C0014
         table_face_direction = [(496, 749), (1657, 809)]
@@ -386,7 +405,7 @@ def get_configs(video_path):
             [814, 844, 890],
             [914, 940, 990]
         ]
-        known_acs = [0, 1]
+        initial_known_acs = [0, 1]
     elif video_path.lower().endswith('C0015.MP4'.lower()):
         # C0015
         table_face_direction = [(112, 544), (1102, 583)]
@@ -403,11 +422,12 @@ def get_configs(video_path):
             [722, 744, 773],
             [784, 810, 835],
         ]
-        known_acs = [0, 1]
+        initial_known_acs = [0, 1]
     else:
         print('No such configs')
         return
-    return table_face_direction, table_service_direction, table_horizontal_direction, desk_positions, known_acs
+    return table_face_direction, table_service_direction, table_horizontal_direction, desk_positions, \
+           initial_known_acs, avilable_counters_skip_seconds
 
 
 if __name__ == '__main__':
@@ -422,9 +442,10 @@ if __name__ == '__main__':
 
     # step 1. video path
     video_path = '/home/ma-glass/Downloads/D1.mp4'
+    video_path = '/mnt/2630afa8-db60-478d-ac09-0af3b44bead6/Downloads/Demo Import/D1.mp4'
     # video_path = '/mnt/2630afa8-db60-478d-ac09-0af3b44bead6/Downloads/IMGP1138.MOV'
     # video_path = '/mnt/2630afa8-db60-478d-ac09-0af3b44bead6/Downloads/C0014.MP4'
-    # video_path = '/mnt/2630afa8-db60-478d-ac09-0af3b44bead6/Downloads/C0015.MP4'
+    video_path = '/mnt/2630afa8-db60-478d-ac09-0af3b44bead6/Downloads/C0015.MP4'
 
     if video_path.endswith('D1.mp4'):
         DEMO = True
@@ -448,7 +469,7 @@ if __name__ == '__main__':
     # pickle_path = '/app/powerarena-sense-gym/models/research/pa_utils/project/aa/IMGP1138_detections_fps5_resnet101_v0.pkl'
     frames_detections = load_detections_pickle(pickle_path)
     print('frames_detections length', len(frames_detections))
-    # frames_detections = None
+    frames_detections = None
 
     # step 4, roi, default empty list
     # Use roi masks if not whole area could contains queue people.
@@ -458,19 +479,25 @@ if __name__ == '__main__':
     detection_roi_masks = []
 
     # step 5, calibrate coordinates, in the sense of (1920 x 1080 pixels)
-    table_face_direction, table_service_direction, table_horizontal_direction, desk_positions, known_acs = get_configs(video_path)
+    table_face_direction, table_service_direction, table_horizontal_direction, desk_positions, known_acs, avilable_counters_skip_seconds = get_configs(video_path)
     table_face_slope, desk_positions = get_desk_positions(table_face_direction, table_service_direction, table_horizontal_direction, desk_positions)
 
-    output_name = 'D1(VA)_v2_1'
-    output_video_path = '%s.mp4' % output_name
+    # step 6, setup output file name
+    output_name = 'C0015'
+    output_folder = '%s_queue_result' % output_name
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
+    output_video_path = os.path.join(output_folder, '%s(VA).mp4' % output_name)
     fourcc = cv2.VideoWriter_fourcc(*'XVID')
     video_writer = cv2.VideoWriter(output_video_path, fourcc, 1, (IMAGE_WIDTH, IMAGE_HEIGHT))
-    csv_path = '%s_queue_info.csv' % output_name
+    csv_path = os.path.join(output_folder, '%s_queue_info.csv' % output_name)
+    queue_time_output_path = os.path.join(output_folder, '%s_queue_time.txt' % output_name)
     output_processor = get_output_processor(csv_path=csv_path, video_writer=video_writer)
     # output_processor = None
 
     track_detections(frames_detections, image_reader_bootstrap, image_reader,
-                     detection_roi_masks=detection_roi_masks, desk_positions=desk_positions, table_face_slope=table_face_slope,
+                     detection_roi_masks, desk_positions, table_face_slope, queue_time_output_path,
+                     avilable_counters_skip_seconds=avilable_counters_skip_seconds,
                      known_available_counters=known_acs, max_queue_gap=MAX_QUEUE_GAP,
                      wait_time=5, output_processor=output_processor)
     video_writer.release()
