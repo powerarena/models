@@ -135,9 +135,9 @@ def draw_bounding_box_on_image(image,
                                xmax,
                                color='red',
                                thickness=4,
-                               font_size=7,
                                display_str_list=(),
-                               use_normalized_coordinates=True):
+                               use_normalized_coordinates=True,
+                               font_size=7):
   """Adds a bounding box to an image.
 
   Bounding box coordinates can be specified in either absolute (pixel) or
