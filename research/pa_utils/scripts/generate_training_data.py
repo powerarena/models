@@ -8,9 +8,10 @@ if __name__ == '__main__':
     logging.getLogger().setLevel(logging.INFO)
 
     output_dir = '/mnt/2630afa8-db60-478d-ac09-0af3b44bead6/Dataset/Project/FEHD/JPEGImages'
-    video_path = '/mnt/2630afa8-db60-478d-ac09-0af3b44bead6/Dataset/Video/FEHD/testtest_1528416060_1528496060.dav'
+    video_file = 'NVR02 (Site 13 - 23)_S16-MK-WOS1_20180606181400_20180606204600.avi'
+    video_path = '/mnt/2630afa8-db60-478d-ac09-0af3b44bead6/Dataset/Video/FEHD/' + video_file
     image_prefix = 'FEHD' + '-' + os.path.splitext(os.path.basename(video_path))[0][21:32] + '-' + os.path.splitext(os.path.basename(video_path))[0][:20]
-    output_fps = 1
+    output_fps = 1/10
     show_images = True
     known_fps = None
     skip_n_seconds = 0
@@ -21,8 +22,8 @@ if __name__ == '__main__':
     # display_only = False
     prefix_exists_error = not display_only and False
     wait_time = 300
-    start_time = 0#20 * 60 + 25
-    end_time = 0#21 * 60 + 25
+    start_time = 0 * 60 + 50
+    end_time = 2 * 60 + 0
     if start_time > 0:
         skip_n_seconds = start_time
     if end_time > 0:
