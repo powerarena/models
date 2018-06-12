@@ -120,7 +120,8 @@ def generate_from_video(video_path, output_dir, image_prefix='',
             logging.info('processed fps = %.2f, processed spf = %.3f' % (processed_frames/processed_time, processed_time/processed_frames))
 
 
-def generate_samples_images(dataset_dir, output_dir, label_classes=None):
+def generate_samples_images(dataset_dir, output_dir, label_classes=None,
+                            annotation_dir='Sample_Annotations', image_dir='Sample_JPEGImages'):
     if not os.path.exists(output_dir):
         os.mkdir(output_dir)
     color_list = get_color_list()
@@ -129,8 +130,8 @@ def generate_samples_images(dataset_dir, output_dir, label_classes=None):
         for label_class in label_classes:
             color_dict[label_class] = color_list[len(color_dict)]
     print(color_dict)
-    anno_dir = os.path.join(dataset_dir, 'Annotations')
-    image_dir = os.path.join(dataset_dir, 'JPEGImages')
+    anno_dir = os.path.join(dataset_dir, annotation_dir)
+    image_dir = os.path.join(dataset_dir, image_dir)
     for xml_file in os.listdir(anno_dir):
         if xml_file.endswith('.xml'):
             xml_path = os.path.join(anno_dir, xml_file)

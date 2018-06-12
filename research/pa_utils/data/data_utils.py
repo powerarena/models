@@ -108,10 +108,10 @@ def get_image_reader(image_dir=None, video_path=None, video_fps=1, skip_video_se
                 break
 
 
-def generate_output_video(frames, output_path, width, height, output_fps=1):
+def generate_output_video(frames_generator, output_path, width, height, output_fps=1):
     fourcc = cv2.VideoWriter_fourcc(*'XVID')
     video_writer = cv2.VideoWriter(output_path, fourcc, output_fps, (width, height))
-    for frame in frames:
+    for frame in frames_generator:
         video_writer.write(frame)
         cv2.imshow('', frame)
         cv2.waitKey(1)

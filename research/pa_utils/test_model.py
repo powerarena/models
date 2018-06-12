@@ -44,32 +44,6 @@ def test_detection_model(sess, label_path, image_dir=None, video_path=None, vide
     cv2.destroyAllWindows()
 
 
-def detect_vision(sess, label_path, video_path, output_path, min_score_thresh=.5, output_fps=10):
-    category_index = create_label_categories(label_path, 100)
-    length, width, height, fps = get_video_info(video_path)
-    print('length %s, width %s, height %s, fps %s' % (length, width, height, fps))
-    frame_freq = int(fps / output_fps)
-    fourcc = cv2.VideoWriter_fourcc(*'XVID')
-    output_video_shape = (width, height)
-    if width > 1920:
-        new_frame = resize_image(np.zeros((height, width, 3)), 1080, 1920)
-        output_video_shape = (new_frame.shape[1], new_frame.shape[0])
-        print('reshape frame from', (width, height), 'to', output_video_shape)
-    # VideoWriter fps must be integer >= 1
-    video_writer = cv2.VideoWriter(output_path, fourcc, 1, output_video_shape)
-    with sess:
-        for frame in read_video(video_path, frame_freq=frame_freq):
-            frame = cv2.resize(frame, output_video_shape)
-            output_dict = run_inference_for_single_image(sess, frame)
-            label_image(frame, output_dict, category_index, min_score_thresh=min_score_thresh)
-            video_writer.write(frame)
-            cv2.imshow('frame', frame)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-
-    video_writer.release()
-
-
 def loop_input(pipeline_config_path, input_type='eval', wait_time=1):
     # import matplotlib
     # import matplotlib.pyplot as plt
@@ -150,8 +124,8 @@ def get_csv_outputer_lambda(output_path):
 
 
 if __name__ == '__main__':
-    # os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"  # so the IDs match nvidia-smi
-    # os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"  # so the IDs match nvidia-smi
+    os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
     useRT = False
     min_score_thresh = .5
@@ -161,11 +135,12 @@ if __name__ == '__main__':
     video_path = '/mnt/2630afa8-db60-478d-ac09-0af3b44bead6/Dataset/Video/hku/IMG_2893.MOV'
     video_path = '/mnt/2630afa8-db60-478d-ac09-0af3b44bead6/Dataset/Video/Cerie/New_HD/MVI_8580.MP4'
     video_path = '/home/ma-glass/Downloads/D1.mp4'
+    video_path = '/mnt/Glass-2T/Downloads/NVR01 (Site 1 - 12)_S11-S-SWV1_20180606154200_20180606154500.avi'
     # video_path = '/home/ma-glass/Downloads/Bird Feeding New 1.MOV'
     # video_path = '/home/ma-glass/Downloads/MK Large Object.mp4'
 
     base_folder = os.path.dirname(__file__)
-    label_path = os.path.join(base_folder, '../object_detection/data/person_label_map.pbtxt')
+    label_path = os.path.join(base_folder, 'data/label_maps/fehd_garbage.pbtxt')
     # label_path = os.path.join(base_folder, 'data/label_maps/cerie_label_map.pbtxt')
     # label_path = os.path.join(base_folder, 'data/label_maps/person_label_map.pbtxt')
 
@@ -193,10 +168,7 @@ if __name__ == '__main__':
     # label_path = '/mnt/2630afa8-db60-478d-ac09-0af3b44bead6/DataScience/ObjectDetection/TrainObjectDetection/data/cerie/training/pascal_label_map.pbtxt'
 
     # train fehd model
-    model_folder = 'faster_rcnn_resnet101_bird'
-    # model_folder = 'faster_rcnn_resnet101_garbage'
-    train_version = 'train'
-    # checkpoint_dir = os.path.join(base_folder, 'model_output/fehd/%s/%s/' % (model_folder, train_version))
+    checkpoint_dir = '/mnt/2630afa8-db60-478d-ac09-0af3b44bead6/Dataset/Project/FEHD/train'
     # inference_graph_path = os.path.join(checkpoint_dir, 'inference/frozen_inference_graph.pb')
     # label_path = os.path.join(base_folder, 'data/label_maps/fehd_garbage.pbtxt')
     # label_path = os.path.join(base_folder, 'data/label_maps/fehd_bird.pbtxt')
@@ -217,13 +189,8 @@ if __name__ == '__main__':
     graph, sess = get_session(checkpoint_dir=checkpoint_dir, pipeline_config_path=None, config=None)
 
     # test_detection_model(sess, label_path, image_dir=image_dir, min_score_thresh=min_score_thresh, wait_time=0)
-    test_detection_model(sess, label_path, video_path=video_path, video_fps=1/3, min_score_thresh=min_score_thresh, wait_time=1)
+    # test_detection_model(sess, label_path, video_path=video_path, video_fps=1, min_score_thresh=min_score_thresh, wait_time=50)
     # test_detection_model(sess, label_path, image_dir=image_dir, min_score_thresh=min_score_thresh, wait_time=0)
     # test_detection_model(sess, label_path, video_path=video_path, video_fps=1, min_score_thresh=min_score_thresh, wait_time=1, useRT=useRT, output_processor=None)
-
-    # output_path = '/home/ma-glass/Downloads/泉塘派出所前园盘X东-白天(VA).mp4'
-    # detect_vision(sess, label_path, video_path, output_path)
-    output_path = '/home/ma-glass/Documents/cerie_MVI_8580(VA).mp4'
-    # detect_vision(sess, label_path, video_path, output_path, min_score_thresh=.5, output_fps=1/10)
 
     # loop_video(video_path)
