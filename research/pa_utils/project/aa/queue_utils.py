@@ -372,6 +372,18 @@ def draw_queue_stats(current_second, image, queues_count, desk_positions):
         cv2.putText(image, 'Total: %d' % total_count, (1550, 100), font, 2, stat_color, 2, cv2.LINE_AA)
 
 
+def draw_queue_time_result(image, queue_result, desk_positions):
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    for queue_idx, queue_time_result in queue_result.items():
+        min_queue_time = queue_time_result['min_queue_time']
+        avg_queue_time = queue_time_result['avg_queue_time']
+        max_queue_time = queue_time_result['max_queue_time']
+        text_position = (desk_positions[queue_idx][0][0] - 30, desk_positions[queue_idx][0][1] - 100 + 60)
+        cv2.putText(image, 'min:%d, avg:%d, max:%d' % (min_queue_time, avg_queue_time, max_queue_time),
+                    text_position, font, 1,
+                    COLOR_LIST[queue_idx], 1, cv2.LINE_AA)
+
+
 def process_and_draw_track_lines(image, grid_detection_history, current_frame_idx, show_last_n_frames=PROCESS_FPS*MAX_TRACK_SECONDS, draw_flow=False):
     # ***tune-able parameter***
     # grid weight formula/ratio
@@ -702,46 +714,69 @@ def get_output_processor(max_queue=10, csv_path=None, video_writer=None, folder_
             os.makedirs(folder_path)
 
     def _run(frame_idx, queues_count, queues_detections, image=None, with_queue_length=False):
-        current_sec = frame_idx // PROCESS_FPS
-        if frame_idx % PROCESS_FPS == 0:
-            if fw is not None:
-                queues_info = []
-                for queue_idx in range(max_queue):
-                    if queue_idx in queues_detections and len(queues_detections[queue_idx]) > 0:
-                        queue_detections = queues_detections[queue_idx]
-                        queue_x_start = sorted(queue_detections, key=lambda x: x[1])[0][1]
-                        queue_x_end = sorted(queue_detections, key=lambda x: x[3])[-1][3]
-                        queues_info.append(str(queues_count[queue_idx]) + ',' + str(queue_x_end - queue_x_start))
-                    else:
-                        queues_info.append('0,0')
-                queue_count_str = ','.join(queues_info)
-                fw.write('%d,%s\n' % (current_sec, queue_count_str))
+        if frame_idx is not None:
+            current_sec = frame_idx // PROCESS_FPS
+            if frame_idx % PROCESS_FPS == 0:
+                if fw is not None:
+                    queues_info = []
+                    for queue_idx in range(max_queue):
+                        if queue_idx in queues_detections and len(queues_detections[queue_idx]) > 0:
+                            queue_detections = queues_detections[queue_idx]
+                            queue_x_start = sorted(queue_detections, key=lambda x: x[1])[0][1]
+                            queue_x_end = sorted(queue_detections, key=lambda x: x[3])[-1][3]
+                            queues_info.append(str(queues_count[queue_idx]) + ',' + str(queue_x_end - queue_x_start))
+                        else:
+                            queues_info.append('0,0')
+                    queue_count_str = ','.join(queues_info)
+                    fw.write('%d,%s\n' % (current_sec, queue_count_str))
 
-            if video_writer is not None:
-                video_writer.write(image)
+                if video_writer is not None:
+                    video_writer.write(image)
 
-            # if folder_path is not None and image is not None and current_sec % 15 == 0:
-            #     file_path = os.path.join(folder_path, '%d.jpg' % current_sec)
-            #     cv2.imwrite(file_path, image)
+                # if folder_path is not None and image is not None and current_sec % 15 == 0:
+                #     file_path = os.path.join(folder_path, '%d.jpg' % current_sec)
+                #     cv2.imwrite(file_path, image)
+        elif image is not None and video_writer is not None:
+            video_writer.write(image)
+
     return _run
 
 
 def create_demo_queues_time(queue_time_output_path, maximized_queues_counts, current_sec):
+    demo_estimated_queues_time = dict()
     with open(queue_time_output_path, 'w') as fw:
         fw.write('queue,min,avg,max\n')
         fw.write('1,%d,%d,%d\n' % (max(0, current_sec-180+1),max(0, current_sec-180+1),max(0, current_sec-180+1)))
+        demo_estimated_queues_time[0] = dict(min_queue_time=max(0, current_sec-180+1),
+                                        avg_queue_time=max(0, current_sec-180+1),
+                                        max_queue_time=max(0, current_sec-180+1))
         if current_sec >= 1335:
             fw.write('2,75,244.8,1200\n')
             fw.write('3,90,273.6,1335\n')
+            demo_estimated_queues_time[1] = dict(min_queue_time=75,
+                                            avg_queue_time=244.8,
+                                            max_queue_time=1200)
+            demo_estimated_queues_time[2] = dict(min_queue_time=90,
+                                            avg_queue_time=273.6,
+                                            max_queue_time=1335)
         else:
             queues_first_group = {0: 1, 1: 7, 2: 2}
             estimated_queues_time = estimate_queue_time_based_on_queues_count(None, maximized_queues_counts, queues_first_group)
-            queue_stats = estimated_queues_time[1]
-            fw.write('%d,%d,%d,%d\n' % (1 + 1, min(75, queue_stats['min_queue_time']), min(244.8, queue_stats['avg_queue_time']),
-                                        min(1200, queue_stats['max_queue_time'])))
-            queue_stats = estimated_queues_time[2]
-            fw.write('%d,%d,%d,%d\n' % (2 + 1, min(90, queue_stats['min_queue_time']), min(273.6, queue_stats['avg_queue_time']),
-                                        min(1335, queue_stats['max_queue_time'])))
+            if 1 in estimated_queues_time:
+                queue_stats = estimated_queues_time[1]
+                fw.write('%d,%d,%d,%d\n' % (1 + 1, min(75, queue_stats['min_queue_time']), min(244.8, queue_stats['avg_queue_time']),
+                                            min(1200, queue_stats['max_queue_time'])))
+                demo_estimated_queues_time[1] = dict(min_queue_time=min(75, queue_stats['min_queue_time']),
+                                                avg_queue_time=min(244.8, queue_stats['avg_queue_time']),
+                                                max_queue_time=min(1200, queue_stats['max_queue_time']))
+            if 2 in estimated_queues_time:
+                queue_stats = estimated_queues_time[2]
+                fw.write('%d,%d,%d,%d\n' % (2 + 1, min(90, queue_stats['min_queue_time']), min(273.6, queue_stats['avg_queue_time']),
+                                            min(1335, queue_stats['max_queue_time'])))
+                demo_estimated_queues_time[2] = dict(min_queue_time=min(90, queue_stats['min_queue_time']),
+                                                avg_queue_time=min(273.6, queue_stats['avg_queue_time']),
+                                                max_queue_time=min(1335, queue_stats['max_queue_time']))
+    return demo_estimated_queues_time
 
 
 class QueuePerson:
@@ -876,4 +911,4 @@ if __name__ == "__main__":
     queues_first_group = {0:1, 1:7, 2: 2}
     file_name = 'D1_queue_time.txt'
     estimate_queue_time_based_on_queues_count(file_name, queues_count, queues_first_group)
-    create_demo_queues_time(file_name, queues_count, 60)
+    # create_demo_queues_time(file_name, queues_count, 1500)

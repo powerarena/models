@@ -13,7 +13,7 @@ from pa_utils.image_utils import label_image
 from pa_utils.project.aa.queue_utils import draw_counter_regions, draw_counter_tables, draw_grid_lines, \
     draw_queue_stats, draw_roi_masks, get_and_draw_baisc_queue_lines, get_and_draw_basic_queue_regions, \
     get_and_draw_dynamic_queue_lines, get_and_draw_queues, get_and_draw_service_regions, process_and_draw_track_lines, \
-    get_and_draw_queue_regions
+    get_and_draw_queue_regions, draw_queue_time_result
 # utils
 from pa_utils.project.aa.queue_utils import bbox_center, get_nearest_grid_id, maximize_counts, process_raw_demo_queues_count, \
     filter_detections_inside_regions, detect_image_by_worker, get_desk_positions, get_output_processor
@@ -250,6 +250,7 @@ def track_detections(detections, image_reader_bootstrap, image_reader, detection
     finish_loop_input = False
     enum_reader = enumerate(image_reader)
     current_sec = 0
+    image = None
     while True:
         if detections is None:
             ### worker ###
@@ -348,32 +349,28 @@ def track_detections(detections, image_reader_bootstrap, image_reader, detection
         start = time.time()
 
     if DEMO:
-        create_demo_queues_time(queue_time_output_path, maximized_queues_counts, current_sec)
+        estimated_queues_time = create_demo_queues_time(queue_time_output_path, maximized_queues_counts, current_sec)
     else:
-        estimate_queue_time_based_on_queues_count(queue_time_output_path, maximized_queues_counts)
+        estimated_queues_time = estimate_queue_time_based_on_queues_count(queue_time_output_path, maximized_queues_counts)
+
+    if image is not None and len(estimated_queues_time) > 0:
+        draw_queue_time_result(image, estimated_queues_time, desk_positions)
+        sleep_sec_count = 0
+        while sleep_sec_count <= 5:
+            output_processor(None, None, None, image=image)
+            cv2.imshow('', image)
+            if cv2.waitKey(1000) & 0xFF == ord('q'):
+                break
+            sleep_sec_count += 1
+
     cv2.destroyAllWindows()
 
 
 def get_configs(video_path):
     avilable_counters_skip_seconds = DEFAULT_SKIP_SECONDS_FOR_AVAILABLE_COUNTERS
 
-    # IMGP1138
-    if video_path.lower().endswith('IMGP1138.MOV'.lower()):
-        table_face_direction = [(420, 812), (1579, 962)]
-        table_service_direction = [(177, 535), (1895, 190)]
-        table_horizontal_direction = [(393, 749), (1579, 453)]
-        desk_positions = [
-            [121, 173, 356, ],
-            [545, 602, 758, ],
-            [788, 841, 990, ],
-            [1121, 1176, 1302, ],
-            [1322, 1361, 1498, ],
-            [1584, 1631, 1731, ],
-            [1733, 1783, 1882, ],
-        ]
-        initial_known_acs = [0, 1, 2, 3, 4, 5, 6]
-        avilable_counters_skip_seconds = 1
-    elif video_path.lower().endswith('D1.mp4'.lower()):
+    # DEMO
+    if video_path.lower().endswith('D1.mp4'.lower()):
         # D1
         table_face_direction = [(460, 703), (1404, 816)]
         table_service_direction = [(213, 530), (1484, 144)]
@@ -391,41 +388,43 @@ def get_configs(video_path):
              [1410, 1442, 1486, ],
         ]
         initial_known_acs = [0, 1, 2]
-    elif video_path.lower().endswith('C0014.MP4'.lower()):
-        # C0014
-        table_face_direction = [(496, 749), (1657, 809)]
-        table_service_direction = [(250, 506), (1134, 236)]
-        table_horizontal_direction = [(97, 745), (1146, 348)]
+    elif video_path.lower().endswith('TODO.mp4'.lower()):
+        # Step 1. edit above line, e.g. TODO.mp4 => D2.mp4
+
+        # Step 2. Assume the image is 1920x1080, please resize the image before find coordinates
+        # use pa_utils/scripts/resize_image.py to resize the captured screen
+
+        # Step 3. find 2 points of the "vertical line",  i.e. the line perpendicular to counters
+        table_face_direction = [(327, 684), (1412, 814)]
+
+        # Step 4. find 2 points of "upper horizontal line", i.e. the line connect the counters
+        table_service_direction = [(218, 523), (1493, 137)]
+
+        # Step 5. find 2 points of the "lower horizontal line", i.e. the line where counters touch the ground
+        table_horizontal_direction = [(219, 722), (1485, 266)]
+
+        # Step 6. find x coordinate for each counter, each counter should have 3 x coordinates
+        # the y coordinate will be calculated based on the x coordinate and the "upper horizontal line"
         desk_positions = [
-            [206, 253, 334],
-            [340, 378, 461],
-            [509, 542, 605],
-            [604, 640, 696],
-            [729, 766, 817],
-            [814, 844, 890],
-            [914, 940, 990]
+            [177, 217, 319],
+            [403, 447, 542],
+            [549, 586, 668],
+            [730, 773, 845],
+            [851, 885, 954],
+            [999, 1037, 1097],
+            [1099, 1129, 1187],
+            [1222, 1256, 1308],
+            [1306, 1335, 1384],
+            [1409, 1441, 1485],
         ]
-        initial_known_acs = [0, 1]
-    elif video_path.lower().endswith('C0015.MP4'.lower()):
-        # C0015
-        table_face_direction = [(112, 544), (1102, 583)]
-        table_service_direction = [(181, 381), (837, 157)]
-        table_horizontal_direction = [(110, 545), (837, 247)]
-        desk_positions = [
-            [152, 186, 247],
-            [248, 274, 331],
-            [366, 397, 444],
-            [441, 468, 509],
-            [535, 562, 600],
-            [599, 619, 654],
-            [672, 698, 728],
-            [722, 744, 773],
-            [784, 810, 835],
-        ]
-        initial_known_acs = [0, 1]
+
+        # Step 7. you could provide available cs, index start from 0.
+        # if cannot determined, then set it to be None
+        initial_known_acs = [0, 1, 2]
     else:
         print('No such configs')
         return
+
     return table_face_direction, table_service_direction, table_horizontal_direction, desk_positions, \
            initial_known_acs, avilable_counters_skip_seconds
 
@@ -440,21 +439,16 @@ if __name__ == '__main__':
     # 2a. if two nearby queues have comparable queue length, then we will use the weighted flow to determine the queue lines.
     # 2b. otherwise, if one queue is too short, compared with another, we use default queue region instead.
 
+    # BOOTSTRAP_SEC = 1
+
     # step 1. video path
-    video_path = '/home/ma-glass/Downloads/D1.mp4'
-    video_path = '/mnt/2630afa8-db60-478d-ac09-0af3b44bead6/Downloads/Demo Import/D1.mp4'
-    # video_path = '/mnt/2630afa8-db60-478d-ac09-0af3b44bead6/Downloads/IMGP1138.MOV'
-    # video_path = '/mnt/2630afa8-db60-478d-ac09-0af3b44bead6/Downloads/C0014.MP4'
-    video_path = '/mnt/2630afa8-db60-478d-ac09-0af3b44bead6/Downloads/C0015.MP4'
+    video_path = '/mnt/2630afa8-db60-478d-ac09-0af3b44bead6/Downloads/D1_TODO.mp4'
 
     if video_path.endswith('D1.mp4'):
         DEMO = True
 
-    # BOOTSTRAP_SEC = 1
-
-    # step 2, crop region, default None
+    # step 2. (Optional) crop region, default = None
     # if image size is too large & roi less than 50%, crop instead of mask, y1, x1, y2, x2
-    CROP_REGION = [0, 0, 1080, 1920]
     CROP_REGION = None
 
     image_reader_bootstrap = get_image_reader(video_path=video_path, video_fps=PROCESS_FPS, max_video_length=BOOTSTRAP_SEC,
@@ -462,28 +456,22 @@ if __name__ == '__main__':
     image_reader = get_image_reader(video_path=video_path, video_fps=PROCESS_FPS, max_video_length=0,
                                     crop_region=CROP_REGION, output_minmax_size=(IMAGE_HEIGHT, IMAGE_WIDTH))
 
-    # step 3, preload detections, default None
-    pickle_path = '/app/powerarena-sense-gym/models/research/pa_utils/project/aa/d1_detections_fps5.pkl'
-    pickle_path = '/app/powerarena-sense-gym/models/research/pa_utils/project/aa/d1_detections_fps5_bgr.pkl'
-    # pickle_path = '/app/powerarena-sense-gym/models/research/pa_utils/project/aa/d1_detections_fps10_resnet101.pkl'
-    # pickle_path = '/app/powerarena-sense-gym/models/research/pa_utils/project/aa/IMGP1138_detections_fps5_resnet101_v0.pkl'
-    frames_detections = load_detections_pickle(pickle_path)
-    print('frames_detections length', len(frames_detections))
+    # step 3. (Optional) preload detections, default = None
+    # pickle_path = '/app/powerarena-sense-gym/models/research/pa_utils/project/aa/d1_detections_fps5_bgr.pkl'
+    # frames_detections = load_detections_pickle(pickle_path)
     frames_detections = None
 
-    # step 4, roi, default empty list
+    # step 4. (Optional) roi, default empty list, default = []
     # Use roi masks if not whole area could contains queue people.
-    # detection_roi_masks = [[(55, 365), (956, 148), (956, 447), (55, 768)],
-    #                        [(1486, 144), (1920, 144), (1740, 1000), (162, 738)]]
     # detection_roi_masks = [[(0, 0), (1250, 0), (1250, 800), (0, 800)]]
     detection_roi_masks = []
 
-    # step 5, calibrate coordinates, in the sense of (1920 x 1080 pixels)
+    # step 5. calibrate coordinates, in the sense of (1920 x 1080 pixels)
+    # Please IMPLEMENT get_configs
     table_face_direction, table_service_direction, table_horizontal_direction, desk_positions, known_acs, avilable_counters_skip_seconds = get_configs(video_path)
     table_face_slope, desk_positions = get_desk_positions(table_face_direction, table_service_direction, table_horizontal_direction, desk_positions)
 
-    # step 6, setup output file name
-    output_name = 'C0015'
+    output_name = os.path.splitext(os.path.basename(video_path))[0]
     output_folder = '%s_queue_result' % output_name
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
