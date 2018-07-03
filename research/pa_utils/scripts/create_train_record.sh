@@ -1,1 +1,0 @@
-python -m object_detection.dataset_tools.create_pascal_tf_record --data_dir=/mnt/2630afa8-db60-478d-ac09-0af3b44bead6/Dataset/Project --year=FEHD --output_path=/mnt/2630afa8-db60-478d-ac09-0af3b44bead6/Dataset/Project/FEHD/train.record --label_map_path=/app/powerarena-sense-gym/models/research/pa_utils/data/label_maps/fehd_garbage.pbtxt --set=all
