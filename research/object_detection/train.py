@@ -80,11 +80,17 @@ flags.DEFINE_string('input_config_path', '',
                     'Path to an input_reader_pb2.InputReader config file.')
 flags.DEFINE_string('model_config_path', '',
                     'Path to a model_pb2.DetectionModel config file.')
+flags.DEFINE_string('gpu', '',
+                    'gpu ids to use, start from 0. (Default all.)')
 
 FLAGS = flags.FLAGS
 
 
 def main(_):
+  if FLAGS.gpu:
+    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+    os.environ["CUDA_VISIBLE_DEVICES"] = FLAGS.gpu
+
   assert FLAGS.train_dir, '`train_dir` is missing.'
   if FLAGS.task == 0: tf.gfile.MakeDirs(FLAGS.train_dir)
   if FLAGS.pipeline_config_path:

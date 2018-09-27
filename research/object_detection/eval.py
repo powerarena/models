@@ -43,6 +43,8 @@ Example usage:
         --model_config_path=model_config.pbtxt \
         --input_config_path=eval_input_config.pbtxt
 """
+import logging
+logging.basicConfig(level=logging.INFO)
 import functools
 import os
 import tensorflow as tf
@@ -77,12 +79,18 @@ flags.DEFINE_string('model_config_path', '',
 flags.DEFINE_boolean('run_once', False, 'Option to only run a single pass of '
                      'evaluation. Overrides the `max_evals` parameter in the '
                      'provided config.')
+flags.DEFINE_string('gpu', '',
+                    'gpu ids to use, start from 0. (Default all.)')
 FLAGS = flags.FLAGS
 
 
 def main(unused_argv):
   assert FLAGS.checkpoint_dir, '`checkpoint_dir` is missing.'
   assert FLAGS.eval_dir, '`eval_dir` is missing.'
+  if FLAGS.gpu:
+    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+    os.environ["CUDA_VISIBLE_DEVICES"] = FLAGS.gpu
+
   tf.gfile.MakeDirs(FLAGS.eval_dir)
   if FLAGS.pipeline_config_path:
     configs = config_util.get_configs_from_pipeline_file(

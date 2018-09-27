@@ -101,7 +101,8 @@ def draw_bounding_box_on_image_array(image,
                                      color='red',
                                      thickness=4,
                                      display_str_list=(),
-                                     use_normalized_coordinates=True):
+                                     use_normalized_coordinates=True,
+                                     font_size=7):
   """Adds a bounding box to an image (numpy array).
 
   Bounding box coordinates can be specified in either absolute (pixel) or
@@ -124,7 +125,7 @@ def draw_bounding_box_on_image_array(image,
   image_pil = Image.fromarray(np.uint8(image)).convert('RGB')
   draw_bounding_box_on_image(image_pil, ymin, xmin, ymax, xmax, color,
                              thickness, display_str_list,
-                             use_normalized_coordinates)
+                             use_normalized_coordinates, font_size=font_size)
   np.copyto(image, np.array(image_pil))
 
 
@@ -172,7 +173,8 @@ def draw_bounding_box_on_image(image,
   draw.line([(left, top), (left, bottom), (right, bottom),
              (right, top), (left, top)], width=thickness, fill=color)
   try:
-    font = ImageFont.truetype('arial.ttf', font_size)
+    # font = ImageFont.truetype('arial.ttf', font_size)
+    font = ImageFont.truetype('fonts-japanese-gothic.ttf', font_size)
   except IOError:
     font = ImageFont.load_default()
 
@@ -542,7 +544,9 @@ def visualize_boxes_and_labels_on_image_array(
     line_thickness=4,
     groundtruth_box_visualization_color='black',
     skip_scores=False,
-    skip_labels=False):
+    skip_labels=False,
+    classes_color_map=None,
+    font_size=7):
   """Overlay labeled boxes on an image with formatted scores and label names.
 
   This function groups boxes that correspond to the same location
@@ -618,7 +622,9 @@ def visualize_boxes_and_labels_on_image_array(
           else:
             display_str = '{}: {}%'.format(display_str, int(100*scores[i]))
         box_to_display_str_map[box].append(display_str)
-        if agnostic_mode:
+        if classes_color_map is not None and classes[i] in classes_color_map:
+          box_to_color_map[box] = classes_color_map[classes[i]]
+        elif agnostic_mode:
           box_to_color_map[box] = 'DarkOrange'
         else:
           box_to_color_map[box] = STANDARD_COLORS[
@@ -649,7 +655,8 @@ def visualize_boxes_and_labels_on_image_array(
         color=color,
         thickness=line_thickness,
         display_str_list=box_to_display_str_map[box],
-        use_normalized_coordinates=use_normalized_coordinates)
+        use_normalized_coordinates=use_normalized_coordinates,
+        font_size=font_size)
     if keypoints is not None:
       draw_keypoints_on_image_array(
           image,
