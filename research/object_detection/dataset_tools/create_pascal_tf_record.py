@@ -16,10 +16,25 @@
 r"""Convert raw PASCAL dataset to TFRecord for object_detection.
 
 Example usage:
-    python object_detection/dataset_tools/create_pascal_tf_record.py \
-        --data_dir=/home/user/VOCdevkit \
-        --year=VOC2012 \
-        --output_path=/home/user/pascal.record
+    python -m object_detection.dataset_tools.create_pascal_tf_record \
+        --data_dir=/app/model_training/tutorial \
+        --year=cifar_train \
+        --output_path=/app/model_training/tutorial/records/cifar_train.record \
+        --label_map_path=/app/model_training/tutorial/cifar10.pbtxt \
+        --annotations_dir=/app/model_training/tutorial/cifar_train/Annotations \
+        --images_dir=/app/model_training/tutorial/cifar_train/JPEGImages \
+
+    python -m object_detection.dataset_tools.create_pascal_tf_record \
+        --data_dir=/app/model_training/tutorial \
+        --year=cifar_train \
+        --output_path=/app/model_training/tutorial/records/cifar_train.record \
+        --label_map_path=/app/model_training/tutorial/cifar10.pbtxt \
+        --annotations_dir=/app/model_training/tutorial/cifar_train/Annotations \
+        --images_dir=/app/model_training/tutorial/cifar_train/JPEGImages \
+        --skip_category=$skip_category \
+        --custom_label_map="$custom_label_map" \
+        --keep_empty_image=$keep_empty_image
+
 """
 from __future__ import absolute_import
 from __future__ import division
@@ -39,14 +54,15 @@ from object_detection.utils import label_map_util
 
 
 flags = tf.app.flags
+FLAGS = flags.FLAGS
 flags.DEFINE_string('data_dir', '', 'Root directory to raw PASCAL VOC dataset.')
-flags.DEFINE_string('set', 'train', 'Convert training set, validation set or '
+flags.DEFINE_string('set', 'all', 'Convert training set, validation set or '
                                     'merged set.')
 flags.DEFINE_string('annotations_dir', 'Annotations',
                     '(Relative) path to annotations directory.')
 flags.DEFINE_string('images_dir', 'JPEGImages',
                     '(Relative) path to images directory.')
-flags.DEFINE_string('year', 'VOC2007', 'Desired challenge year.')
+flags.DEFINE_string('year', '', 'Desired challenge year.')
 flags.DEFINE_string('output_path', '', 'Path to output TFRecord')
 flags.DEFINE_string('label_map_path', 'data/pascal_label_map.pbtxt',
                     'Path to label map proto')
@@ -57,17 +73,14 @@ flags.DEFINE_string('skip_category', '', 'comma separated')
 flags.DEFINE_string('custom_label_map', '', 'comma separated')
 flags.DEFINE_boolean('keep_empty_image', False, 'Keep the image even the image doesnot contains any labels')
 
-FLAGS = flags.FLAGS
 
 SETS = ['train', 'val', 'trainval', 'test', 'all']
 YEARS = ['VOC2007', 'VOC2012', 'merged']
 
-print('FLAGS.custom_label_map', FLAGS.custom_label_map)
-if FLAGS.custom_label_map:
-    custom_label_map = dict(label_map.split(':') for label_map in FLAGS.custom_label_map.split(','))
-else:
-    custom_label_map = dict()
 label_count = dict(total=0)
+custom_label_map = dict()
+
+
 def dict_to_tf_example(data,
                        images_dir,
                        label_map_dict,
@@ -176,14 +189,16 @@ def dict_to_tf_example(data,
 
 
 def main(_):
-    print('skip_category =', FLAGS.skip_category)
-    print('custom_label_map =', custom_label_map)
+    print('FLAGS.custom_label_map =', FLAGS.custom_label_map)
+    print('FLAGS.skip_category =', FLAGS.skip_category)
+    print('FLAGS.custom_label_map =', custom_label_map)
+    if FLAGS.custom_label_map:
+        custom_label_map.update(dict(label_map.split(':') for label_map in FLAGS.custom_label_map.split(',')))
+
     # if FLAGS.set not in SETS:
     #   raise ValueError('set must be in : {}'.format(SETS))
     # if FLAGS.year not in YEARS:
     #   raise ValueError('year must be in : {}'.format(YEARS))
-
-    print('hard code folder to FLAGS.year', FLAGS.year)
 
     data_dir = FLAGS.data_dir
     years = ['VOC2007', 'VOC2012']
