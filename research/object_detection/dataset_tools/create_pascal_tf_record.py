@@ -55,13 +55,14 @@ flags.DEFINE_boolean('ignore_difficult_instances', False, 'Whether to ignore '
 flags.DEFINE_string('annotation_image_dirs_file', '', 'Multiple annotation_dir & image_dir pairs text file.')
 flags.DEFINE_string('skip_category', '', 'comma separated')
 flags.DEFINE_string('custom_label_map', '', 'comma separated')
+flags.DEFINE_boolean('keep_empty_image', False, 'Keep the image even the image doesnot contains any labels')
 
 FLAGS = flags.FLAGS
 
 SETS = ['train', 'val', 'trainval', 'test', 'all']
 YEARS = ['VOC2007', 'VOC2012', 'merged']
 
-
+print('FLAGS.custom_label_map', FLAGS.custom_label_map)
 if FLAGS.custom_label_map:
     custom_label_map = dict(label_map.split(':') for label_map in FLAGS.custom_label_map.split(','))
 else:
@@ -97,7 +98,8 @@ def dict_to_tf_example(data,
         encoded_jpg = fid.read()
     encoded_jpg_io = io.BytesIO(encoded_jpg)
     image = PIL.Image.open(encoded_jpg_io)
-    if image.format == 'PNG':
+    if image.format == 'PNG' or image.size[0] > 1920:
+        image.thumbnail((1920, 1920), PIL.Image.ANTIALIAS)
         temp_file = io.BytesIO()
         image.save(temp_file, format="jpeg")
 
@@ -135,7 +137,6 @@ def dict_to_tf_example(data,
                 continue
             elif FLAGS.skip_category and obj['name'] in set(FLAGS.skip_category.split(',')):
                 continue
-
             difficult_obj.append(int(difficult))
             obj['name'] = obj['name'].lower()
             xmin.append(float(obj['bndbox']['xmin']) / width)
@@ -149,7 +150,7 @@ def dict_to_tf_example(data,
             label_count[obj['name']] = label_count.get(obj['name'], 0) + 1
         if len(data['object']) > 0:
             label_count['total'] += 1
-    if len(classes) == 0:
+    if len(classes) == 0 and not FLAGS.keep_empty_image:
         return
     example = tf.train.Example(features=tf.train.Features(feature={
         'image/height': dataset_util.int64_feature(height),
