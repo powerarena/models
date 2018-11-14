@@ -19,10 +19,13 @@ from __future__ import division
 from __future__ import print_function
 
 import os
-import sys
 
+from absl import app as absl_app
+from absl import flags
 import tensorflow as tf  # pylint: disable=g-bad-import-order
 
+from official.utils.flags import core as flags_core
+from official.utils.logs import logger
 from official.resnet import resnet_model
 from official.resnet import resnet_run_loop
 
@@ -35,10 +38,13 @@ _RECORD_BYTES = _DEFAULT_IMAGE_BYTES + 1
 _NUM_CLASSES = 10
 _NUM_DATA_FILES = 5
 
+# TODO(tobyboyd): Change to best practice 45K(train)/5K(val)/10K(test) splits.
 _NUM_IMAGES = {
     'train': 50000,
     'validation': 10000,
 }
+
+DATASET_NAME = 'CIFAR-10'
 
 
 ###############################################################################
@@ -61,7 +67,7 @@ def get_filenames(is_training, data_dir):
     return [os.path.join(data_dir, 'test_batch.bin')]
 
 
-def parse_record(raw_record, is_training):
+def parse_record(raw_record, is_training, dtype):
   """Parse CIFAR-10 image and label from a raw record."""
   # Convert bytes to a vector of uint8 that is record_bytes long.
   record_vector = tf.decode_raw(raw_record, tf.uint8)
@@ -69,7 +75,6 @@ def parse_record(raw_record, is_training):
   # The first byte represents the label, which we convert from uint8 to int32
   # and then to one-hot.
   label = tf.cast(record_vector[0], tf.int32)
-  label = tf.one_hot(label, _NUM_CLASSES)
 
   # The remaining bytes after the label represent the image, which we reshape
   # from [depth * height * width] to [depth, height, width].
@@ -81,6 +86,7 @@ def parse_record(raw_record, is_training):
   image = tf.cast(tf.transpose(depth_major, [1, 2, 0]), tf.float32)
 
   image = preprocess_image(image, is_training)
+  image = tf.cast(image, dtype)
 
   return image, label
 
@@ -104,20 +110,18 @@ def preprocess_image(image, is_training):
 
 
 def input_fn(is_training, data_dir, batch_size, num_epochs=1,
-             num_parallel_calls=1, multi_gpu=False):
-  """Input_fn using the tf.data input pipeline for CIFAR-10 dataset.
+             dtype=tf.float32, datasets_num_private_threads=None,
+             num_parallel_batches=1):
+  """Input function which provides batches for train or eval.
 
   Args:
     is_training: A boolean denoting whether the input is for training.
     data_dir: The directory containing the input data.
     batch_size: The number of samples per batch.
     num_epochs: The number of epochs to repeat the dataset.
-    num_parallel_calls: The number of records that are processed in parallel.
-      This can be optimized per data set but for generally homogeneous data
-      sets, should be approximately the number of available CPU cores.
-    multi_gpu: Whether this is run multi-GPU. Note that this is only required
-      currently to handle the batch leftovers, and can be removed
-      when that is handled directly by Estimator.
+    dtype: Data type to use for images/features
+    datasets_num_private_threads: Number of private threads for tf.data.
+    num_parallel_batches: Number of parallel batches for tf.data.
 
   Returns:
     A dataset that can be used for iteration.
@@ -125,17 +129,22 @@ def input_fn(is_training, data_dir, batch_size, num_epochs=1,
   filenames = get_filenames(is_training, data_dir)
   dataset = tf.data.FixedLengthRecordDataset(filenames, _RECORD_BYTES)
 
-  num_images = is_training and _NUM_IMAGES['train'] or _NUM_IMAGES['validation']
-
   return resnet_run_loop.process_record_dataset(
-      dataset, is_training, batch_size, _NUM_IMAGES['train'],
-      parse_record, num_epochs, num_parallel_calls,
-      examples_per_epoch=num_images, multi_gpu=multi_gpu)
+      dataset=dataset,
+      is_training=is_training,
+      batch_size=batch_size,
+      shuffle_buffer=_NUM_IMAGES['train'],
+      parse_record_fn=parse_record,
+      num_epochs=num_epochs,
+      dtype=dtype,
+      datasets_num_private_threads=datasets_num_private_threads,
+      num_parallel_batches=num_parallel_batches
+  )
 
 
-def get_synth_input_fn():
+def get_synth_input_fn(dtype):
   return resnet_run_loop.get_synth_input_fn(
-      _HEIGHT, _WIDTH, _NUM_CHANNELS, _NUM_CLASSES)
+      _HEIGHT, _WIDTH, _NUM_CHANNELS, _NUM_CLASSES, dtype=dtype)
 
 
 ###############################################################################
@@ -145,7 +154,7 @@ class Cifar10Model(resnet_model.Model):
   """Model class with appropriate defaults for CIFAR-10 data."""
 
   def __init__(self, resnet_size, data_format=None, num_classes=_NUM_CLASSES,
-               version=resnet_model.DEFAULT_VERSION,
+               resnet_version=resnet_model.DEFAULT_VERSION,
                dtype=resnet_model.DEFAULT_DTYPE):
     """These are the parameters that work for CIFAR-10 data.
 
@@ -155,8 +164,8 @@ class Cifar10Model(resnet_model.Model):
         data format to use when setting up the model.
       num_classes: The number of output classes needed from the model. This
         enables users to extend the same model to their own datasets.
-      version: Integer representing which version of the ResNet network to use.
-        See README for details. Valid values: [1, 2]
+      resnet_version: Integer representing which version of the ResNet network
+      to use. See README for details. Valid values: [1, 2]
       dtype: The TensorFlow dtype to use for calculations.
 
     Raises:
@@ -176,12 +185,9 @@ class Cifar10Model(resnet_model.Model):
         conv_stride=1,
         first_pool_size=None,
         first_pool_stride=None,
-        second_pool_size=8,
-        second_pool_stride=1,
         block_sizes=[num_blocks] * 3,
         block_strides=[1, 2, 2],
-        final_size=64,
-        version=version,
+        resnet_version=resnet_version,
         data_format=data_format,
         dtype=dtype
     )
@@ -190,14 +196,14 @@ class Cifar10Model(resnet_model.Model):
 def cifar10_model_fn(features, labels, mode, params):
   """Model function for CIFAR-10."""
   features = tf.reshape(features, [-1, _HEIGHT, _WIDTH, _NUM_CHANNELS])
-
+  # Learning rate schedule follows arXiv:1512.03385 for ResNet-56 and under.
   learning_rate_fn = resnet_run_loop.learning_rate_with_decay(
       batch_size=params['batch_size'], batch_denom=128,
-      num_images=_NUM_IMAGES['train'], boundary_epochs=[100, 150, 200],
+      num_images=_NUM_IMAGES['train'], boundary_epochs=[91, 136, 182],
       decay_rates=[1, 0.1, 0.01, 0.001])
 
-  # We use a weight decay of 0.0002, which performs better
-  # than the 0.0001 that was originally suggested.
+  # Weight decay of 2e-4 diverges from 1e-4 decay used in the ResNet paper
+  # and seems more stable in testing. The difference was nominal for ResNet-56.
   weight_decay = 2e-4
 
   # Empirical testing showed that including batch_normalization variables
@@ -218,33 +224,51 @@ def cifar10_model_fn(features, labels, mode, params):
       learning_rate_fn=learning_rate_fn,
       momentum=0.9,
       data_format=params['data_format'],
-      version=params['version'],
+      resnet_version=params['resnet_version'],
       loss_scale=params['loss_scale'],
       loss_filter_fn=loss_filter_fn,
-      multi_gpu=params['multi_gpu'],
-      dtype=params['dtype']
+      dtype=params['dtype'],
+      fine_tune=params['fine_tune']
   )
 
 
-def main(argv):
-  parser = resnet_run_loop.ResnetArgParser()
-  # Set defaults that are reasonable for this model.
-  parser.set_defaults(data_dir='/tmp/cifar10_data',
-                      model_dir='/tmp/cifar10_model',
-                      resnet_size=32,
-                      train_epochs=250,
-                      epochs_between_evals=10,
-                      batch_size=128)
+def define_cifar_flags():
+  resnet_run_loop.define_resnet_flags()
+  flags.adopt_module_key_flags(resnet_run_loop)
+  flags_core.set_defaults(data_dir='/tmp/cifar10_data',
+                          model_dir='/tmp/cifar10_model',
+                          resnet_size='56',
+                          train_epochs=182,
+                          epochs_between_evals=10,
+                          batch_size=128,
+                          image_bytes_as_serving_input=False)
 
-  flags = parser.parse_args(args=argv[1:])
 
-  input_function = flags.use_synthetic_data and get_synth_input_fn() or input_fn
+def run_cifar(flags_obj):
+  """Run ResNet CIFAR-10 training and eval loop.
 
+  Args:
+    flags_obj: An object containing parsed flag values.
+  """
+  if flags_obj.image_bytes_as_serving_input:
+    tf.logging.fatal('--image_bytes_as_serving_input cannot be set to True '
+                     'for CIFAR. This flag is only applicable to ImageNet.')
+    return
+
+  input_function = (flags_obj.use_synthetic_data and
+                    get_synth_input_fn(flags_core.get_tf_dtype(flags_obj)) or
+                    input_fn)
   resnet_run_loop.resnet_main(
-      flags, cifar10_model_fn, input_function,
+      flags_obj, cifar10_model_fn, input_function, DATASET_NAME,
       shape=[_HEIGHT, _WIDTH, _NUM_CHANNELS])
+
+
+def main(_):
+  with logger.benchmark_context(flags.FLAGS):
+    run_cifar(flags.FLAGS)
 
 
 if __name__ == '__main__':
   tf.logging.set_verbosity(tf.logging.INFO)
-  main(argv=sys.argv)
+  define_cifar_flags()
+  absl_app.run(main)

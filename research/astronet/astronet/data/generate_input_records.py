@@ -88,7 +88,6 @@ import tensorflow as tf
 
 from astronet.data import preprocess
 
-
 parser = argparse.ArgumentParser()
 
 _DR24_TCE_URL = ("https://exoplanetarchive.ipac.caltech.edu/cgi-bin/TblView/"
@@ -100,7 +99,7 @@ parser.add_argument(
     required=True,
     help="CSV file containing the Q1-Q17 DR24 Kepler TCE table. Must contain "
     "columns: rowid, kepid, tce_plnt_num, tce_period, tce_duration, "
-    "tce_time0bk. Download from: %s" % _DR24_TCE_URL)
+    "tce_time0bk. Download from: {}".format(_DR24_TCE_URL))
 
 parser.add_argument(
     "--kepler_data_dir",
@@ -131,25 +130,6 @@ _LABEL_COLUMN = "av_training_set"
 _ALLOWED_LABELS = {"PC", "AFP", "NTP"}
 
 
-def _set_float_feature(ex, name, value):
-  """Sets the value of a float feature in a tensorflow.train.Example proto."""
-  assert name not in ex.features.feature, "Duplicate feature: %s" % name
-  ex.features.feature[name].float_list.value.extend([float(v) for v in value])
-
-
-def _set_bytes_feature(ex, name, value):
-  """Sets the value of a bytes feature in a tensorflow.train.Example proto."""
-  assert name not in ex.features.feature, "Duplicate feature: %s" % name
-  ex.features.feature[name].bytes_list.value.extend([
-      str(v).encode("latin-1") for v in value])
-
-
-def _set_int64_feature(ex, name, value):
-  """Sets the value of an int64 feature in a tensorflow.train.Example proto."""
-  assert name not in ex.features.feature, "Duplicate feature: %s" % name
-  ex.features.feature[name].int64_list.value.extend([int(v) for v in value])
-
-
 def _process_tce(tce):
   """Processes the light curve for a Kepler TCE and returns an Example proto.
 
@@ -158,39 +138,11 @@ def _process_tce(tce):
 
   Returns:
     A tensorflow.train.Example proto containing TCE features.
-
-  Raises:
-    IOError: If the light curve files for this Kepler ID cannot be found.
   """
-  # Read and process the light curve.
-  time, flux = preprocess.read_and_process_light_curve(tce.kepid,
-                                                       FLAGS.kepler_data_dir)
-  time, flux = preprocess.phase_fold_and_sort_light_curve(
-      time, flux, tce.tce_period, tce.tce_time0bk)
-
-  # Generate the local and global views.
-  global_view = preprocess.global_view(time, flux, tce.tce_period)
-  local_view = preprocess.local_view(time, flux, tce.tce_period,
-                                     tce.tce_duration)
-
-  # Make output proto.
-  ex = tf.train.Example()
-
-  # Set time series features.
-  _set_float_feature(ex, "global_view", global_view)
-  _set_float_feature(ex, "local_view", local_view)
-
-  # Set other columns.
-  for col_name, value in tce.items():
-    if np.issubdtype(type(value), np.integer):
-      _set_int64_feature(ex, col_name, [value])
-    else:
-      try:
-        _set_float_feature(ex, col_name, [float(value)])
-      except ValueError:
-        _set_bytes_feature(ex, col_name, [value])
-
-  return ex
+  all_time, all_flux = preprocess.read_light_curve(tce.kepid,
+                                                   FLAGS.kepler_data_dir)
+  time, flux = preprocess.process_light_curve(all_time, all_flux)
+  return preprocess.generate_example_for_tce(time, flux, tce)
 
 
 def _process_file_shard(tce_table, file_name):
@@ -266,14 +218,16 @@ def main(argv):
   for i in range(FLAGS.num_train_shards):
     start = boundaries[i]
     end = boundaries[i + 1]
-    file_shards.append((train_tces[start:end], os.path.join(
-        FLAGS.output_dir, "train-%.5d-of-%.5d" % (i, FLAGS.num_train_shards))))
+    filename = os.path.join(
+        FLAGS.output_dir, "train-{:05d}-of-{:05d}".format(
+            i, FLAGS.num_train_shards))
+    file_shards.append((train_tces[start:end], filename))
 
   # Validation and test sets each have a single shard.
-  file_shards.append((val_tces, os.path.join(FLAGS.output_dir,
-                                             "val-00000-of-00001")))
-  file_shards.append((test_tces, os.path.join(FLAGS.output_dir,
-                                              "test-00000-of-00001")))
+  file_shards.append((val_tces,
+                      os.path.join(FLAGS.output_dir, "val-00000-of-00001")))
+  file_shards.append((test_tces,
+                      os.path.join(FLAGS.output_dir, "test-00000-of-00001")))
   num_file_shards = len(file_shards)
 
   # Launch subprocesses for the file shards.

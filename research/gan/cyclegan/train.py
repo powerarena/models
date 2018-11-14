@@ -19,13 +19,12 @@ from __future__ import division
 from __future__ import print_function
 
 
-import numpy as np
+from absl import flags
 import tensorflow as tf
 
 import data_provider
 import networks
 
-flags = tf.flags
 tfgan = tf.contrib.gan
 
 
@@ -87,10 +86,7 @@ def _define_model(images_x, images_y):
       data_y=images_y)
 
   # Add summaries for generated images.
-  tfgan.eval.add_image_comparison_summaries(
-      cyclegan_model, num_comparisons=3, display_diffs=False)
-  tfgan.eval.add_gan_model_image_summaries(
-      cyclegan_model, grid_size=int(np.sqrt(FLAGS.batch_size)))
+  tfgan.eval.add_cyclegan_image_summaries(cyclegan_model)
 
   return cyclegan_model
 
@@ -173,10 +169,13 @@ def main(_):
 
   with tf.device(tf.train.replica_device_setter(FLAGS.ps_tasks)):
     with tf.name_scope('inputs'):
-      images_x, images_y = data_provider.provide_custom_datasets(
+      images_x, images_y = data_provider.provide_custom_data(
           [FLAGS.image_set_x_file_pattern, FLAGS.image_set_y_file_pattern],
           batch_size=FLAGS.batch_size,
           patch_size=FLAGS.patch_size)
+      # Set batch size for summaries.
+      images_x.set_shape([FLAGS.batch_size, None, None, None])
+      images_y.set_shape([FLAGS.batch_size, None, None, None])
 
     # Define CycleGAN model.
     cyclegan_model = _define_model(images_x, images_y)

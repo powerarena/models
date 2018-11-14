@@ -36,6 +36,13 @@ class Event(object):
     self._duration = duration
     self._t0 = t0
 
+  def __str__(self):
+    return "<period={}, duration={}, t0={}>".format(self.period, self.duration,
+                                                    self.t0)
+
+  def __repr__(self):
+    return "Event({})".format(str(self))
+
   @property
   def period(self):
     return self._period
@@ -55,7 +62,7 @@ class Event(object):
       other_event: An Event.
       period_rtol: Relative tolerance in matching the periods.
       t0_durations: Tolerance in matching the t0 values, in units of the other
-          Event's duration.
+        Event's duration.
 
     Returns:
       True if this Event is the same as other_event, within the given tolerance.

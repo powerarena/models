@@ -84,6 +84,7 @@ custom_label_map = dict()
 def dict_to_tf_example(data,
                        images_dir,
                        label_map_dict,
+<<<<<<< HEAD
                        ignore_difficult_instances=False):
     """Convert XML derived dict to tf.Example proto.
 

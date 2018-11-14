@@ -19,12 +19,13 @@ from __future__ import division
 from __future__ import print_function
 
 
+from absl import flags
 import numpy as np
 import tensorflow as tf
 
 import train
 
-FLAGS = tf.flags.FLAGS
+FLAGS = flags.FLAGS
 mock = tf.test.mock
 tfgan = tf.contrib.gan
 
@@ -59,9 +60,6 @@ class TrainTest(tf.test.TestCase):
     self.assertIsInstance(cyclegan_model, tfgan.CycleGANModel)
     self.assertShapeEqual(images_x_np, cyclegan_model.reconstructed_x)
     self.assertShapeEqual(images_y_np, cyclegan_model.reconstructed_y)
-
-    mock_eval.add_image_comparison_summaries.assert_called_once()
-    mock_eval.add_gan_model_image_summaries.assert_called_once()
 
   @mock.patch.object(train.networks, 'generator', autospec=True)
   @mock.patch.object(train.networks, 'discriminator', autospec=True)
@@ -130,11 +128,12 @@ class TrainTest(tf.test.TestCase):
     FLAGS.cycle_consistency_loss_weight = 2.0
     FLAGS.max_number_of_steps = 1
 
-    mock_data_provider.provide_custom_datasets.return_value = (tf.zeros(
-        [1, 2], dtype=tf.float32), tf.zeros([1, 2], dtype=tf.float32))
+    mock_data_provider.provide_custom_data.return_value = (
+        tf.zeros([3, 2, 2, 3], dtype=tf.float32),
+        tf.zeros([3, 2, 2, 3], dtype=tf.float32))
 
     train.main(None)
-    mock_data_provider.provide_custom_datasets.assert_called_once_with(
+    mock_data_provider.provide_custom_data.assert_called_once_with(
         ['/tmp/x/*.jpg', '/tmp/y/*.jpg'], batch_size=3, patch_size=8)
     mock_define_model.assert_called_once_with(mock.ANY, mock.ANY)
     mock_cyclegan_loss.assert_called_once_with(
