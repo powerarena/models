@@ -115,7 +115,7 @@ class COCOWrapper(coco.COCO):
     if (set(annotation_img_ids) != (set(annotation_img_ids)
                                     & set(self.getImgIds()))):
       raise ValueError('Results do not correspond to current coco set')
-    results.dataset['categories'] = copy.deepcopy(self.dataset['categories'])
+    results.dataset['categories'] = copy.deepcopy(list(self.dataset['categories']))
     if self._detection_type == 'bbox':
       for idx, ann in enumerate(annotations):
         bb = ann['bbox']
