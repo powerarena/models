@@ -84,7 +84,8 @@ custom_label_map = dict()
 def dict_to_tf_example(data,
                        images_dir,
                        label_map_dict,
-                       ignore_difficult_instances=False):
+                       ignore_difficult_instances=False,
+                       keep_empty_image=False):
     """Convert XML derived dict to tf.Example proto.
 
     Notice that this function normalizes the bounding box coordinates provided
@@ -163,7 +164,7 @@ def dict_to_tf_example(data,
             label_count[obj['name']] = label_count.get(obj['name'], 0) + 1
         if len(data['object']) > 0:
             label_count['total'] += 1
-    if len(classes) == 0 and not FLAGS.keep_empty_image:
+    if len(classes) == 0 and not keep_empty_image:
         return
     example = tf.train.Example(features=tf.train.Features(feature={
         'image/height': dataset_util.int64_feature(height),
@@ -229,7 +230,7 @@ def main(_):
             examples_list = sorted(list(set(annotation_set) & set(image_set)))
         else:
             examples_path = os.path.join(data_dir, year, 'ImageSets', 'Main',
-                                         'aeroplane_' + FLAGS.set + '.txt')
+                                         FLAGS.set + '.txt')
             examples_list = dataset_util.read_examples_list(examples_path)
         for idx, example in enumerate(examples_list):
             if idx % 100 == 0:
@@ -240,7 +241,7 @@ def main(_):
             xml = etree.fromstring(xml_str)
             data = dataset_util.recursive_parse_xml_to_dict(xml)['annotation']
             tf_example = dict_to_tf_example(data, images_dir, label_map_dict,
-                                            FLAGS.ignore_difficult_instances)
+                                            FLAGS.ignore_difficult_instances, FLAGS.keep_empty_image)
             if tf_example is not None:
                 writer.write(tf_example.SerializeToString())
     writer.close()
